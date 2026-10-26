@@ -8,10 +8,11 @@ from api.logger import logger
 
 
 class Live:
-    def __init__(self, attachment: dict, defaults: dict, course_id: str):
+    def __init__(self, attachment: dict, defaults: dict, course_id: str, control=None):
         self.attachment = attachment
         self.defaults = defaults  # 包含用户ID、课程ID等信息
         self.course_id = course_id  # 课程ID
+        self.control = control
         self.name = self.attachment.get("property", {}).get("title", "未知直播")  # 直播名称
         self.headers = gc.HEADERS.copy()
         self.headers.update({

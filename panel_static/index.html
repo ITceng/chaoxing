@@ -1,0 +1,83 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="robots" content="noindex, nofollow">
+  <title>超星多账号控制面板</title>
+  <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+  <div id="boot" class="boot">正在加载...</div>
+
+  <section id="auth-view" class="auth hidden">
+    <div class="auth-card">
+      <div class="brand">
+        <div class="brand-mark">CX</div>
+        <div>
+          <h1>超星控制面板</h1>
+          <p class="muted">多账号独立运行 · 暂停/停止互不影响</p>
+        </div>
+      </div>
+
+      <form id="setup-form" class="form hidden">
+        <h2>初始化管理员</h2>
+        <p class="muted">首次使用请创建管理员账号。密码至少 10 位。</p>
+        <label>用户名<input name="username" autocomplete="username" required minlength="3" maxlength="64"></label>
+        <label>密码<input name="password" type="password" autocomplete="new-password" required minlength="10"></label>
+        <label>确认密码<input name="confirm" type="password" autocomplete="new-password" required minlength="10"></label>
+        <button type="submit" class="primary">创建并进入</button>
+        <p class="error" data-error></p>
+      </form>
+
+      <form id="login-form" class="form hidden">
+        <h2>登录</h2>
+        <label>用户名<input name="username" autocomplete="username" required></label>
+        <label>密码<input name="password" type="password" autocomplete="current-password" required></label>
+        <button type="submit" class="primary">登录</button>
+        <p class="error" data-error></p>
+      </form>
+    </div>
+  </section>
+
+  <div id="app-view" class="hidden">
+    <header class="topbar">
+      <div class="brand small">
+        <div class="brand-mark">CX</div>
+        <div>
+          <strong>超星控制面板</strong>
+          <span id="user-label" class="muted"></span>
+        </div>
+      </div>
+      <div class="top-actions">
+        <button id="btn-add" class="primary">添加账号</button>
+        <button id="btn-start-all">启动全部</button>
+        <button id="btn-pause-all">暂停全部</button>
+        <button id="btn-stop-all" class="danger-ghost">停止全部</button>
+        <button id="btn-settings">设置</button>
+        <button id="btn-audit">审计</button>
+        <button id="btn-password">改密码</button>
+        <button id="btn-logout" class="danger-ghost">退出</button>
+      </div>
+    </header>
+
+    <main class="container">
+      <div id="notice" class="notice hidden"></div>
+      <section class="summary-grid">
+        <div class="stat"><span id="stat-total">0</span><label>账号总数</label></div>
+        <div class="stat"><span id="stat-running">0</span><label>运行中</label></div>
+        <div class="stat"><span id="stat-paused">0</span><label>已暂停</label></div>
+        <div class="stat"><span id="stat-failed">0</span><label>失败/停止</label></div>
+      </section>
+
+      <section id="accounts" class="accounts"></section>
+      <p id="empty" class="empty hidden">还没有账号，点击右上角“添加账号”开始。</p>
+    </main>
+  </div>
+
+  <div id="modal-root"></div>
+  <div id="toast" class="toast hidden"></div>
+
+  <script src="/static/app.js"></script>
+</body>
+</html>

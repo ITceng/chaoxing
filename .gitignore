@@ -157,3 +157,11 @@ cache.json
 start*.bat
 .workbuddy/
 myConfig/
+
+# 面板运行数据（含加密后的账号信息、Cookie、日志）
+data/
+*.enc
+secret.key
+session.key
+admin.json
+.ruff_cache/

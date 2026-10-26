@@ -6,8 +6,9 @@ from api.logger import logger
 
 class LiveProcessor:
     @staticmethod
-    def run_live(live: Live, speed: float = 1.0):
-        """循环提交直播时长，直到达到总时长"""
+    def run_live(live: Live, speed: float = 1.0, control=None):
+        """循环提交直播时长，直到达到总时长；支持暂停/停止."""
+        control = control or getattr(live, "control", None)
         # 获取直播状态（包含总时长）
         live_status = live.get_status()
         if not live_status:
@@ -31,17 +32,25 @@ class LiveProcessor:
 
         # 循环提交时长（每59秒一次，模拟持续观看）
         for i in range(total_minutes):
+            if control is not None:
+                control.checkpoint()
             logger.info(f"直播'{live.name}'已观看{i + 1}/{total_minutes}分钟")
             success = live.do_finish()  # 提交当前时长
             if not success:
                 logger.warning(f"第{i + 1}分钟时长提交失败，将重试")
                 # 失败重试一次
-                time.sleep(5)
+                if control is not None:
+                    control.sleep(5)
+                else:
+                    time.sleep(5)
                 live.do_finish()
 
             # 根据倍速调整间隔时间
             sleep_time = 59 / speed
-            time.sleep(sleep_time)
+            if control is not None:
+                control.sleep(sleep_time)
+            else:
+                time.sleep(sleep_time)
 
         logger.success(f"直播'{live.name}'时长刷取完成")
         return True

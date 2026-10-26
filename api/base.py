@@ -8,8 +8,7 @@ import time
 from difflib import SequenceMatcher
 from enum import Enum, IntEnum
 from hashlib import md5
-from typing import Optional, Literal
-from typing_extensions import Self
+from typing import Literal, Optional
 
 import requests
 from loguru import logger
@@ -22,7 +21,8 @@ from api.answer import Tiku, TikuManual
 from api.answer_check import cut
 from api.cipher import AESCipher
 from api.config import GlobalConst as gc
-from api.cookies import save_cookies, use_cookies
+from api.control import RunControl
+from api.cookies import bind_cookies_path, save_cookies, use_cookies
 from api.decode import (
     decode_course_list,
     decode_course_point,
@@ -37,37 +37,52 @@ def get_timestamp():
 
 
 class SessionManager:
-    _instance = None
+    """会话管理.
+
+    以线程本地（thread-local）方式持有 ``requests.Session``：Web 面板中每个
+    账号的 worker 线程绑定自己的会话，避免多账号并发时 Cookie / 连接池互相
+    覆盖。未显式绑定时按需创建，CLI 行为不变。
+    """
+
     _login_lock = threading.Lock()
-
-    def __new__(cls, *args, **kwargs):
-        if cls._instance is None:
-            cls._instance = super().__new__(cls)
-        return cls._instance
-
-    def __init__(self):
-        self._session = requests.Session()
-        self._session.mount("https://", HTTPAdapter(max_retries=10))
-        self._session.mount("http://", HTTPAdapter(max_retries=10))
-        self._session.request = functools.partial(self._session.request, timeout=5)
-        # For debug purposes
-        # self._session.verify=False
-        self._session.headers.clear()
-        self._session.headers.update(gc.HEADERS)
-        self._session.cookies.update(use_cookies())
+    _local = threading.local()
 
     @classmethod
-    def get_instance(cls) -> Self:
-        return cls()
+    def _build_session(cls, cookies_path=None) -> requests.Session:
+        session = requests.Session()
+        session.mount("https://", HTTPAdapter(max_retries=10))
+        session.mount("http://", HTTPAdapter(max_retries=10))
+        session.request = functools.partial(session.request, timeout=15)
+        session.headers.clear()
+        session.headers.update(gc.HEADERS)
+        session.cookies.update(use_cookies(cookies_path))
+        return session
+
+    @classmethod
+    def bind(cls, session: requests.Session | None = None,
+             cookies_path=None) -> requests.Session:
+        """绑定当前线程的会话（不传 session 时新建）."""
+        if cookies_path is not None:
+            bind_cookies_path(cookies_path)
+        if session is None:
+            session = cls._build_session(cookies_path)
+        cls._local.session = session
+        cls._local.cookies_path = cookies_path
+        return session
 
     @classmethod
     def get_session(cls) -> requests.Session:
-        instance = cls.get_instance()
-        return instance._session
+        session = getattr(cls._local, "session", None)
+        if session is None:
+            session = cls._build_session(getattr(cls._local, "cookies_path", None))
+            cls._local.session = session
+        return session
 
     @classmethod
     def update_cookies(cls):
-        cls.get_instance()._session.cookies.update(use_cookies())
+        cls.get_session().cookies.update(
+            use_cookies(getattr(cls._local, "cookies_path", None))
+        )
 
     @classmethod
     def relogin_if_needed(cls, chaoxing_instance) -> bool:
@@ -100,10 +115,11 @@ class Account:
 
 
 class RateLimiter:
-    def __init__(self, call_interval):
+    def __init__(self, call_interval, control: Optional[RunControl] = None):
         self.last_call = time.time()
         self.lock = threading.Lock()
         self.call_interval = call_interval
+        self.control = control
 
     def limit_rate(self, random_time=False, random_min=0.0, random_max=1.0):
         with self.lock:
@@ -113,7 +129,10 @@ class RateLimiter:
             call_wait = base_wait + extra_wait
             self.last_call = now + call_wait
 
-        time.sleep(call_wait)
+        if self.control is not None:
+            self.control.sleep(call_wait)
+        else:
+            time.sleep(call_wait)
 
 
 class StudyResult(Enum):
@@ -387,14 +406,25 @@ class Chaoxing:
         self.tiku = tiku
         self.kwargs = kwargs
         self.rollback_times = 0
-        self.rate_limiter = RateLimiter(0.5)  # 其他接口速率限制比较松
-        self.video_log_limiter = RateLimiter(2)  # 上报进度极其容易卡验证码，限制2s一次
+        self.control: RunControl = kwargs.get("control") or RunControl()
+        self.cookies_path = kwargs.get("cookies_path")
+        self.account_id = kwargs.get("account_id")
+        self.rate_limiter = RateLimiter(0.5, control=self.control)  # 其他接口速率限制比较松
+        # 上报进度极其容易卡验证码，限制2s一次
+        self.video_log_limiter = RateLimiter(2, control=self.control)
+        if self.cookies_path:
+            bind_cookies_path(self.cookies_path)
+
+    def new_session(self) -> requests.Session:
+        """为 worker 线程创建独立会话（共享同一份 Cookie 文件）."""
+        return SessionManager._build_session(self.cookies_path)
 
     def login(self, login_with_cookies=False):
         if login_with_cookies:
             logger.info("Logging in with cookies")
+            if self.cookies_path:
+                bind_cookies_path(self.cookies_path)
             SessionManager.update_cookies()
-            logger.debug(f"Logged in with cookies: {SessionManager.get_instance()._session.cookies}")
             if not self._validate_cookie_session():
                 logger.warning("Cookie 登录校验失败，尝试使用账号密码重新登录")
                 if self.account and self.account.username and self.account.password:
@@ -409,7 +439,7 @@ class Chaoxing:
                 logger.debug(f"获取当前登录用户名失败: {e}")
             return {"status": True, "msg": "登录成功"}
 
-        _session = requests.Session()
+        _session = SessionManager.get_session()
         _url = "https://passport2.chaoxing.com/fanyalogin"
         _data = {
             "fid": "-1",
@@ -425,7 +455,7 @@ class Chaoxing:
         logger.trace("正在尝试登录...")
         resp = _session.post(_url, headers=gc.HEADERS, data=_data)
         if resp and resp.json()["status"] == True:
-            save_cookies(_session)
+            save_cookies(_session, self.cookies_path)
             SessionManager.update_cookies()
             logger.info("登录成功...")
             try:
@@ -452,7 +482,7 @@ class Chaoxing:
         return ""
 
     def _validate_cookie_session(self) -> bool:
-        session = SessionManager.get_instance()._session
+        session = SessionManager.get_session()
         if not session.cookies.get("_uid"):
             return False
 
@@ -646,7 +676,8 @@ class Chaoxing:
             job_info.update(_job_info)
 
         if not job_list:
-            self.study_emptypage(course, point)
+            empty_result = self.study_emptypage(course, point)
+            job_info["empty_page_result"] = "SUCCESS" if empty_result.is_success() else "ERROR"
 
         logger.trace(f"原始任务点列表内容:\n{_resp.text}")
         logger.info("章节任务点读取成功...")
@@ -672,6 +703,7 @@ class Chaoxing:
             headers: Optional[dict] = None,
     ) -> tuple[bool, int]:
 
+        self.control.checkpoint()
         if headers is None:
             logger.warning("null headers")
             headers = gc.VIDEO_HEADERS
@@ -735,13 +767,14 @@ class Chaoxing:
                     solved = False
                     for attempt in range(3):
                         logger.info(f"第 {attempt + 1} 次尝试通关验证码...")
+                        self.control.checkpoint()
                         if captcha_solver.try_pass():
                             logger.success("验证码通关成功！")
                             solved = True
                             break
                         else:
                             logger.warning("验证码验证失败，正在重试...")
-                            time.sleep(2)
+                            self.control.sleep(2)
                     if solved:
                         _session.cookies.update(captcha_solver.s.cookies)
                         res = _session.get(_url, params=params, headers=headers)
@@ -816,7 +849,7 @@ class Chaoxing:
             return None
 
         if resp.status_code != 200:
-            logger.debug("刷新视频状态返回码异常: {}" % resp.status_code)
+            logger.debug("刷新视频状态返回码异常: {}", resp.status_code)
             logger.debug(resp.text)
             return None
 
@@ -892,6 +925,7 @@ class Chaoxing:
         pbar = None
         try:
             while not passed:
+                self.control.checkpoint()
                 # Sometimes the last request needs to be sent several times to complete the task
                 if play_time - last_log_time >= wait_time or play_time == duration:
 
@@ -907,7 +941,7 @@ class Chaoxing:
                             "出现403报错, 正在尝试刷新会话状态 (第{}次)",
                             forbidden_retry,
                         )
-                        time.sleep(random.uniform(2, 4))
+                        self.control.sleep(random.uniform(2, 4))
                         refreshed_meta = self._recover_after_forbidden(_session, _job, _type)
                         if refreshed_meta and refreshed_meta.get("dtoken") and refreshed_meta.get(
                                 "duration") is not None:
@@ -953,7 +987,7 @@ class Chaoxing:
                     pbar.n = int(play_time)
                     pbar.refresh()
 
-                time.sleep(gc.THRESHOLD)
+                self.control.sleep(gc.THRESHOLD)
         finally:
             pbar = self._close_pbar_safe(pbar)
 
@@ -984,6 +1018,7 @@ class Chaoxing:
             - get_timestamp(): To get current timestamp
             - re module for regular expression matching
         """
+        self.control.checkpoint()
         _session = SessionManager.get_session()
         _url = f"https://mooc1.chaoxing.com/ananas/job/document?jobid={_job['jobid']}&knowledgeid={re.findall(r'nodeId_(.*?)-', _job['otherinfo'])[0]}&courseid={_course['courseId']}&clazzid={_course['clazzId']}&jtoken={_job['jtoken']}&_dc={get_timestamp()}"
         _resp = _session.get(_url)
@@ -1060,7 +1095,7 @@ class Chaoxing:
             if attempt > 0:
                 logger.warning(
                     f"章节检测重做第 {attempt}/{max_retries} 轮，携带上一轮错误反馈重新作答")
-                time.sleep(2)
+                self.control.sleep(2)
 
             # 1. 获取题目
             final_resp = {}
@@ -1329,7 +1364,7 @@ class Chaoxing:
             except Exception as e:
                 logger.warning(f"获取章节检测作答记录失败 (第{attempt + 1}次): {e}")
             if attempt < 4:
-                time.sleep(1.5)
+                self.control.sleep(1.5)
 
         if not records:
             # 兜底：重新访问题目页判断是否已通过（详情页=已提交有成绩；可编辑页=未通过可重做）
@@ -1469,6 +1504,7 @@ class Chaoxing:
         """
         阅读任务学习, 仅完成任务点, 并不增长时长
         """
+        self.control.checkpoint()
         _session = SessionManager.get_session()
         _resp = _session.get(
             url="https://mooc1.chaoxing.com/ananas/job/readv2",
@@ -1526,6 +1562,7 @@ class Chaoxing:
             logger.trace(f"Monitor heartbeat failed (non-critical): {e}")
 
     def study_emptypage(self, _course, point):
+        self.control.checkpoint()
         _session = SessionManager.get_session()
         # &cpi=0&verificationcode=&mooc2=1&microTopicId=0&editorPreview=0
         _resp = _session.get(
@@ -1550,6 +1587,7 @@ class Chaoxing:
             return StudyResult.SUCCESS
 
     def _access_chapter_for_count(self, _course, point):
+        self.control.checkpoint()
         _session = SessionManager.get_session()
         # &cpi=0&verificationcode=&mooc2=1&microTopicId=0&editorPreview=0
         _resp = _session.get(
@@ -1650,7 +1688,7 @@ class Chaoxing:
                 self._send_monitor_heartbeat(course, point)
 
                 # 第 3 步：停留 30 秒（模拟前端 setInterval 间隔）
-                time.sleep(30)
+                self.control.sleep(30)
 
                 # 第 4 步：再次发送 monitor 心跳包（模拟 setInterval 触发的第二次心跳）
                 self._send_monitor_heartbeat(course, point)

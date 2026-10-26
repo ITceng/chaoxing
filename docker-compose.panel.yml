@@ -1,0 +1,29 @@
+services:
+  panel:
+    build:
+      context: .
+      dockerfile: Dockerfile.panel
+    image: chaoxing-panel:latest
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:8080:8080"
+    environment:
+      PANEL_DATA_DIR: /data
+      # 生产环境必须改成 1，并通过 HTTPS 访问
+      PANEL_COOKIE_SECURE: "0"
+      # 远程/脚本调用 API 时使用，建议 32 字节以上随机串
+      PANEL_API_KEY: "${PANEL_API_KEY:-}"
+      # 首次远程初始化时使用；初始化完成后可删除
+      PANEL_SETUP_TOKEN: "${PANEL_SETUP_TOKEN:-}"
+      # 反向代理场景打开，让客户端 IP / HTTPS 协议正确
+      PANEL_TRUST_PROXY: "1"
+      PANEL_ALLOWED_ORIGINS: "${PANEL_ALLOWED_ORIGINS:-}"
+      PANEL_SESSION_SECRET: "${PANEL_SESSION_SECRET:-}"
+      PANEL_SECRET_KEY: "${PANEL_SECRET_KEY:-}"
+    volumes:
+      - chaoxing-panel-data:/data
+    security_opt:
+      - no-new-privileges:true
+
+volumes:
+  chaoxing-panel-data:

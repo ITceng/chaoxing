@@ -97,6 +97,27 @@ uv run --python 3.13 main.py -c config.ini
    - 首次运行时，会自动将 `config_template.ini` 复制到该位置作为模板
    - 可以将本地编辑好的配置文件挂载到容器中，按照上述示例命令操作
 
+### 多账号控制面板（推荐）
+
+如果你需要**同时管理多个账号**，并希望停止/暂停其中一个账号时其他账号继续运行，请使用网页控制面板：
+
+```bash
+pip install -r requirements-panel.txt
+PANEL_DATA_DIR=./data PANEL_HOST=127.0.0.1 PANEL_PORT=8080 python panel.py
+```
+
+首次打开 `http://127.0.0.1:8080` 会引导创建管理员（密码至少 10 位）。主要能力：
+
+- 账号独立运行：每个账号独立线程 / 会话 / Cookie / 日志，单账号停止或暂停不影响其他账号；
+- 实时进度、当前章节、增量日志，支持启动全部 / 暂停全部 / 停止全部；
+- 账号密码、Cookie、题库 token 加密落盘，日志自动脱敏；
+- 登录鉴权、CSRF、Origin 校验、登录限流与锁定、可选 `PANEL_API_KEY`；
+- 提供 Docker / systemd / Nginx HTTPS 部署示例。
+
+完整部署与安全说明见 [`docs/panel-deployment.md`](docs/panel-deployment.md)。
+
+> 生产环境请务必放在 HTTPS 反向代理之后，设置 `PANEL_COOKIE_SECURE=1`，并**只使用单 worker**（`gunicorn -w 1`），因为账号运行状态保存在进程内存中。
+
 ### 题库配置说明
 
 在你的配置文件中找到`[tiku]`，按照注释填写想要使用的题库名（即`provider`，大小写要一致），并填写必要信息，如token，然后在启动时添加`-c [你的配置文件路径]`即可。
