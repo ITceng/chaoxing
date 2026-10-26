@@ -893,6 +893,10 @@ def main():
         control.stop()
         logger.error("错误: 程序被用户手动中断")
         return 130
+    except InputFormatError as e:
+        # 参数/课程列表等输入问题：只给一行提示，不打印 traceback，方便脚本按返回码判断
+        logger.error(f"输入错误: {e}")
+        return 2
     except BaseException as e:
         logger.error(f"错误: {type(e).__name__}: {e}")
         logger.error(traceback.format_exc())

@@ -5,6 +5,7 @@ import sys
 import threading
 import time
 import unittest
+from unittest import mock
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
@@ -149,6 +150,16 @@ class SessionManagerTest(unittest.TestCase):
         session = SessionManager.get_session()
         SessionManager.bind(session=session)
         self.assertIs(SessionManager.get_session(), session)
+
+
+class CliExitCodeTest(unittest.TestCase):
+    def setUp(self):
+        main.logger.remove()
+
+    def test_input_error_returns_2_without_traceback(self):
+        from api.exceptions import InputFormatError
+        with mock.patch.object(main, "init_config", side_effect=InputFormatError("课程列表错误")):
+            self.assertEqual(main.main(), 2)
 
 
 if __name__ == "__main__":
