@@ -15,7 +15,7 @@ import panel  # noqa: E402
 class PanelApiTest(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
-        self.app = panel.create_app(Path(self.tmp.name))
+        self.app = panel.create_app(Path(self.tmp.name), supervisor=False)
         self.app.config.update(TESTING=True)
         self.client = self.app.test_client()
 
@@ -96,6 +96,25 @@ class PanelApiTest(unittest.TestCase):
             self.assertEqual(client.get("/api/accounts", headers={"X-API-Key": "bad"}).status_code, 401)
         # 普通会话仍然可用
         self.assertEqual(self.client.get("/api/accounts").status_code, 200)
+
+    def test_autostart_fields_roundtrip(self):
+        csrf = self._setup()
+        headers = {"X-CSRF-Token": csrf}
+        created = self.client.post("/api/accounts", json={
+            "username": "13800000000", "password": "secret", "autostart": True,
+            "auto_restart": False,
+        }, headers=headers)
+        self.assertEqual(created.status_code, 201, created.get_json())
+        account = created.get_json()["account"]
+        self.assertTrue(account["autostart"])
+        self.assertFalse(account["auto_restart"])
+
+        patched = self.client.patch(f"/api/accounts/{account['id']}",
+                                    json={"autostart": False}, headers=headers)
+        self.assertEqual(patched.status_code, 200, patched.get_json())
+        self.assertFalse(patched.get_json()["account"]["autostart"])
+        # 未提交的字段不应被重置
+        self.assertFalse(patched.get_json()["account"]["auto_restart"])
 
     def test_audit_requires_auth(self):
         self.assertEqual(self.app.test_client().get("/api/audit").status_code, 401)

@@ -167,6 +167,23 @@
     return (seconds / 3600).toFixed(1) + " 小时";
   }
 
+  function restartLine(account) {
+    const runtime = account.runtime || {};
+    if (runtime.restart_blocked) {
+      return h("div", { class: "error-line",
+        text: "自动重启已达上限（" + (runtime.restart_count || 0) + " 次/小时），请检查日志后手动启动" });
+    }
+    if (runtime.restart_at && runtime.restart_at * 1000 > Date.now()) {
+      const seconds = Math.max(1, Math.round(runtime.restart_at - Date.now() / 1000));
+      return h("div", { class: "muted", style: "font-size:12px",
+        text: "失败后自动重启：约 " + seconds + " 秒后重试（第 " + (runtime.restart_count || 0) + " 次）" });
+    }
+    if (runtime.started_by === "auto" && statusOf(account) === "running") {
+      return h("div", { class: "muted", style: "font-size:12px", text: "由无人值守自动启动" });
+    }
+    return null;
+  }
+
   function card(account) {
     const runtime = account.runtime || {};
     const status = statusOf(account);
@@ -179,7 +196,8 @@
       h("div", {},
         h("div", { class: "card-title", text: account.name || account.username_hint || account.id }),
         h("div", { class: "card-sub",
-          text: [account.username_hint, account.use_cookies ? "Cookie 登录" : "账号密码登录"]
+          text: [account.username_hint, account.use_cookies ? "Cookie 登录" : "账号密码登录",
+            account.autostart ? "无人值守" : "手动启动"]
             .filter(Boolean).join(" · ") || account.id }),
       ),
       badge(account),
@@ -201,6 +219,7 @@
       bar,
       h("div", { class: "current", text: current ? "正在处理：" + current : "" }),
       runtime.error ? h("div", { class: "error-line", text: "错误：" + runtime.error }) : null,
+      restartLine(account),
       h("div", { class: "muted", style: "font-size:12px",
         text: "课程：" + (account.course_list || "全部") +
           " · 倍速 " + account.speed + " · 并发 " + account.jobs +
@@ -418,6 +437,10 @@
     (state.meta.providers || []).forEach((item) => provider.appendChild(option(item, item)));
     if (account) provider.value = account.provider || "";
     const notes = h("textarea", { name: "notes", maxlength: "1000", value: account ? account.notes : "" });
+    const autostart = h("input", { type: "checkbox", name: "autostart",
+      checked: account ? account.autostart !== false : true });
+    const autoRestart = h("input", { type: "checkbox", name: "auto_restart",
+      checked: account ? account.auto_restart !== false : true });
 
     const form = h("form", { class: "form" },
       h("div", { class: "section-title", text: "登录凭据" }),
@@ -449,6 +472,13 @@
         field("目标次数", target),
         field("题库覆盖", provider),
       ),
+
+      h("div", { class: "section-title", text: "无人值守（服务器自动运行）" }),
+      h("div", { class: "grid2" },
+        h("label", { class: "check" }, autostart, "面板启动后自动开始（autostart）"),
+        h("label", { class: "check" }, autoRestart, "失败后自动重启（auto_restart）"),
+      ),
+      h("p", { class: "hint", text: "手动停止的账号不会被自动重启；自动重启默认最多 5 次/小时，之后停在“失败”等你处理。" }),
       field("备注", notes),
       h("p", { class: "error", "data-form-error": "" }),
     );
@@ -474,6 +504,8 @@
         target_count: Number(target.value),
         provider: provider.value,
         notes: notes.value,
+        autostart: autostart.checked,
+        auto_restart: autoRestart.checked,
       };
       if (username.value.trim()) payload.username = username.value.trim();
       if (password.value) payload.password = password.value;

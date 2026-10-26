@@ -2,6 +2,7 @@
 """账号运行器：每个账号一个独立线程、独立 Session、独立 Cookie 文件、独立控制信号."""
 from __future__ import annotations
 
+import os
 import threading
 import time
 import traceback
@@ -68,6 +69,13 @@ class AccountRunner:
         self.started_at: Optional[float] = None
         self.finished_at: Optional[float] = None
         self.summary: dict[str, Any] = {}
+        # 无人值守相关：手动停止的账号不会被自动重启
+        self.user_stopped = False
+        self.started_by = ""
+        self.restart_at: Optional[float] = None
+        self.restart_count = 0
+        self.restart_blocked = False
+        self.autostart = True
         self._lock = threading.RLock()
 
     # ---------------------------------------------------------------- controls
@@ -75,7 +83,7 @@ class AccountRunner:
     def alive(self) -> bool:
         return bool(self.thread and self.thread.is_alive())
 
-    def start(self) -> tuple[bool, str]:
+    def start(self, source: str = "manual") -> tuple[bool, str]:
         with self._lock:
             if self.alive:
                 return False, "账号正在运行中"
@@ -88,6 +96,15 @@ class AccountRunner:
             self.phase = "queued"
             self.started_at = time.time()
             self.finished_at = None
+            self.started_by = source
+            self.restart_at = None
+            self.restart_blocked = False
+            record = self.accounts.get_public(self.account_id) or {}
+            self.autostart = bool(record.get("autostart", True))
+            if source == "manual":
+                self.user_stopped = False
+                self.restart_count = 0
+                self.manager.reset_restart_state(self.account_id)
             self.thread = threading.Thread(
                 target=self._run, daemon=True, name=f"account-{self.account_id[:8]}"
             )
@@ -109,6 +126,8 @@ class AccountRunner:
     def stop(self) -> tuple[bool, str]:
         if not self.alive and self.final_status in ("idle",):
             return False, "账号未在运行"
+        self.user_stopped = True
+        self.restart_at = None
         self.control.stop()
         if self.processor is not None:
             try:
@@ -123,9 +142,13 @@ class AccountRunner:
 
     def _fail(self, message: str, status: str = "failed") -> None:
         self.error = redact_text(str(message))[:500]
-        self.final_status = status
+        # 用户已经点了停止：运行过程中的异常只是停止的副作用，不应显示成"失败"
+        self.final_status = "stopped" if self.user_stopped else status
         self.phase = "done"
-        logger.error(f"账号任务失败: {self.error}")
+        if self.user_stopped:
+            logger.warning(f"账号已手动停止（停止前错误: {self.error}）")
+        else:
+            logger.error(f"账号任务失败: {self.error}")
 
     def _run(self) -> None:
         token = set_account_context(self.account_id)
@@ -303,6 +326,12 @@ class AccountRunner:
             "finished_at": self.finished_at,
             "error": self.error,
             "summary": self.summary,
+            "autostart": self.autostart,
+            "user_stopped": self.user_stopped,
+            "started_by": self.started_by,
+            "restart_at": self.restart_at,
+            "restart_count": self.restart_count,
+            "restart_blocked": self.restart_blocked,
             "counts": counts,
             "total": total,
             "done": done,
@@ -327,6 +356,111 @@ class RunnerManager:
         self._semaphore = threading.BoundedSemaphore(
             max(1, int(settings.get().get("max_concurrent_accounts", 2) or 2))
         )
+        # 无人值守监督线程：面板启动后自动拉起 autostart 账号，失败后自动重启
+        self._supervisor_thread: Optional[threading.Thread] = None
+        self._supervisor_stop = threading.Event()
+        self._restart_state: dict[str, dict[str, float]] = {}
+        self.supervisor_interval = float(os.environ.get("PANEL_SUPERVISOR_INTERVAL", "5"))
+        self.max_auto_restarts = int(os.environ.get("PANEL_MAX_AUTO_RESTARTS", "5"))
+        self.restart_window = 3600.0
+        self.restart_backoff = float(os.environ.get("PANEL_RESTART_BACKOFF", "20"))
+        self.max_restart_backoff = 600.0
+        self._limit = max(1, int(settings.get().get("max_concurrent_accounts", 2) or 2))
+
+    # ------------------------------------------------------------- supervisor
+    @property
+    def supervisor_running(self) -> bool:
+        return bool(self._supervisor_thread and self._supervisor_thread.is_alive())
+
+    def start_supervisor(self) -> bool:
+        """启动无人值守监督线程（幂等）."""
+        with self._lock:
+            if self.supervisor_running:
+                return False
+            self._supervisor_stop.clear()
+            self._supervisor_thread = threading.Thread(
+                target=self._supervisor_loop, daemon=True, name="panel-supervisor"
+            )
+            self._supervisor_thread.start()
+        logger.info("无人值守已开启：自动启动 autostart 账号，失败后自动重启")
+        return True
+
+    def stop_supervisor(self) -> None:
+        self._supervisor_stop.set()
+        thread = self._supervisor_thread
+        if thread and thread.is_alive():
+            thread.join(2.0)
+
+    def reset_restart_state(self, account_id: str) -> None:
+        with self._lock:
+            self._restart_state.pop(account_id, None)
+
+    def _backoff(self, attempts: int) -> float:
+        return min(self.max_restart_backoff, self.restart_backoff * (2 ** max(0, attempts - 1)))
+
+    def _supervisor_loop(self) -> None:
+        while not self._supervisor_stop.is_set():
+            try:
+                self.supervise_once()
+            except Exception as e:  # noqa: BLE001 - 监督线程不能因为单个账号异常退出
+                logger.error(f"自动调度异常: {type(e).__name__}: {e}")
+            self._supervisor_stop.wait(self.supervisor_interval)
+
+    def supervise_once(self) -> list[str]:
+        """检查所有账号并按需自动启动；返回本次被自动启动的账号 ID."""
+        started: list[str] = []
+        now = time.time()
+        try:
+            limit = int(self.settings.get().get("max_concurrent_accounts", 2) or 2)
+            if limit != self._limit:
+                self.update_limit(limit)
+        except Exception:  # noqa: BLE001
+            pass
+        for account in self.accounts.list_public():
+            account_id = str(account.get("id") or "")
+            if not account_id or not account.get("autostart", True):
+                continue
+            runner = self.get_or_create(account_id)
+            with runner._lock:
+                runner.autostart = True
+            if runner.alive or runner.user_stopped:
+                continue
+            status = runner.final_status
+            if status == "idle":
+                ok, _ = runner.start(source="auto")
+                if ok:
+                    started.append(account_id)
+                continue
+            if status != "failed" or not account.get("auto_restart", True):
+                continue
+            with self._lock:
+                state = self._restart_state.setdefault(
+                    account_id, {"count": 0.0, "next_at": 0.0, "window_start": now}
+                )
+                if now - state["window_start"] >= self.restart_window:
+                    state["count"] = 0.0
+                    state["window_start"] = now
+                if state["count"] >= self.max_auto_restarts:
+                    runner.restart_blocked = True
+                    runner.restart_at = None
+                    continue
+                wait_until = state["next_at"]
+            if now < wait_until:
+                runner.restart_at = wait_until
+                continue
+            ok, _ = runner.start(source="auto")
+            if ok:
+                with self._lock:
+                    state["count"] += 1
+                    runner.restart_count = int(state["count"])
+                    state["next_at"] = now + self._backoff(int(state["count"]))
+                runner.restart_blocked = False
+                logger.warning(
+                    f"账号 {account.get('name') or account_id[:8]} 上次运行失败，"
+                    f"已自动重启（第 {int(state['count'])}/{self.max_auto_restarts} 次）"
+                )
+                started.append(account_id)
+        return started
 
     def get(self, account_id: str) -> Optional[AccountRunner]:
         with self._lock:
@@ -360,6 +494,7 @@ class RunnerManager:
         new_value = max(1, int(value))
         with self._lock:
             self._semaphore = threading.BoundedSemaphore(new_value)
+            self._limit = new_value
 
     def remove(self, account_id: str) -> None:
         with self._lock:
@@ -371,6 +506,7 @@ class RunnerManager:
                 pass
 
     def shutdown(self, timeout: float = 3.0) -> None:
+        self.stop_supervisor()
         with self._lock:
             runners = list(self._runners.values())
         for runner in runners:

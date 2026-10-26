@@ -82,7 +82,12 @@ def _load_or_create_session_secret() -> str:
     return secret
 
 
-def create_app(data_dir: Optional[Path] = None) -> Flask:
+def create_app(data_dir: Optional[Path] = None, supervisor: bool = False) -> Flask:
+    """构建面板应用.
+
+    ``supervisor=True`` 时在第一次请求时启动无人值守线程（仅用于真正对外服务的
+    实例；测试或嵌入式使用时保持关闭，避免自动拉起真实账号）。
+    """
     data_dir = Path(data_dir) if data_dir else DATA_DIR
     app = Flask(__name__, static_folder=str(STATIC_DIR), static_url_path="/static")
     app.secret_key = _load_or_create_session_secret()
@@ -195,6 +200,15 @@ def create_app(data_dir: Optional[Path] = None) -> Flask:
 
     # --------------------------------------------------------------- middleware
     @app.before_request
+    def start_supervisor_once():
+        if not supervisor or os.environ.get("PANEL_AUTOSTART", "1") != "1":
+            return None
+        if not app.config.get("_supervisor_started"):
+            app.config["_supervisor_started"] = True
+            manager.start_supervisor()
+        return None
+
+    @app.before_request
     def rate_limit_api():
         if not request.path.startswith("/api/"):
             return None
@@ -271,6 +285,8 @@ def create_app(data_dir: Optional[Path] = None) -> Flask:
             "providers": sorted(PROVIDER_REGISTRY.keys()),
             "notopen_actions": ["retry", "ask", "continue"],
             "max_concurrent_accounts": settings.get().get("max_concurrent_accounts", 2),
+            "supervisor": manager.supervisor_running,
+            "max_auto_restarts": manager.max_auto_restarts,
         })
 
     # --------------------------------------------------------------------- auth
@@ -656,7 +672,7 @@ def create_app(data_dir: Optional[Path] = None) -> Flask:
     return app
 
 
-app = create_app()
+app = create_app(supervisor=True)
 
 
 def main() -> int:
@@ -694,6 +710,8 @@ def main() -> int:
         logger.warning("未设置 PANEL_API_KEY：远程 API 调用只能使用登录会话（浏览器）")
     if not COOKIE_SECURE and args.host not in ("127.0.0.1", "localhost"):
         logger.warning("面板监听在非本地地址但未开启 PANEL_COOKIE_SECURE，建议通过 HTTPS 反向代理访问")
+    if os.environ.get("PANEL_AUTOSTART", "1") == "1":
+        app.extensions["chaoxing_panel"]["manager"].start_supervisor()
     logger.info(f"面板启动: http://{args.host}:{args.port}")
     app.run(host=args.host, port=args.port, debug=args.debug or PANEL_DEBUG,
             threaded=True, use_reloader=False)

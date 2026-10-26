@@ -110,11 +110,14 @@ PANEL_DATA_DIR=./data PANEL_HOST=127.0.0.1 PANEL_PORT=8080 python panel.py
 
 - 账号独立运行：每个账号独立线程 / 会话 / Cookie / 日志，单账号停止或暂停不影响其他账号；
 - 实时进度、当前章节、增量日志，支持启动全部 / 暂停全部 / 停止全部；
+- 无人值守：服务器重启后自动开始账号，失败自动重启（有上限），手动停止的账号不会被复活；
+- 手机浏览器远程管理：单个账号暂停/停止/继续即时生效，界面已适配手机；
 - 账号密码、Cookie、题库 token 加密落盘，日志自动脱敏；
 - 登录鉴权、CSRF、Origin 校验、登录限流与锁定、可选 `PANEL_API_KEY`；
 - 提供 Docker / systemd / Nginx HTTPS 部署示例。
 
-完整部署与安全说明见 [`docs/panel-deployment.md`](docs/panel-deployment.md)。
+完整部署与安全说明见 [`docs/panel-deployment.md`](docs/panel-deployment.md)，
+手机远程管理与无人值守说明见 [`docs/mobile-control.md`](docs/mobile-control.md)。
 
 > 生产环境请务必放在 HTTPS 反向代理之后，设置 `PANEL_COOKIE_SECURE=1`，并**只使用单 worker**（`gunicorn -w 1`），因为账号运行状态保存在进程内存中。
 

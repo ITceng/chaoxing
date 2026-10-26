@@ -127,6 +127,16 @@ class CourseFilterTest(unittest.TestCase):
         )
         self.assertEqual(len(result), 1)
 
+    def test_star_with_no_courses_returns_empty(self):
+        # 账号没有任何课程时，* 表示"全部"，结果应为空而不是报错/静默假装成功
+        self.assertEqual(main.filter_courses([], ["*"], interactive=False), [])
+
+    def test_explicit_id_with_no_courses_has_clear_error(self):
+        from api.exceptions import InputFormatError
+        with self.assertRaises(InputFormatError) as ctx:
+            main.filter_courses([], ["999"], interactive=False)
+        self.assertIn("没有任何课程", str(ctx.exception))
+
     def test_non_interactive_requires_list(self):
         from api.exceptions import InputFormatError
         with self.assertRaises(InputFormatError):

@@ -1,0 +1,52 @@
+[Unit]
+Description=Chaoxing multi-account panel
+Documentation=file:///opt/chaoxing/docs/mobile-control.md
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=chaoxing
+Group=chaoxing
+WorkingDirectory=/opt/chaoxing
+
+# 面板监听本机，由 Nginx/Caddy 对外提供 HTTPS
+Environment=PANEL_HOST=127.0.0.1
+Environment=PANEL_PORT=8080
+Environment=PANEL_DATA_DIR=/opt/chaoxing/data
+
+# 无人值守：面板启动后自动开始 autostart 账号，失败后自动重启
+Environment=PANEL_AUTOSTART=1
+Environment=PANEL_SUPERVISOR_INTERVAL=5
+Environment=PANEL_MAX_AUTO_RESTARTS=5
+Environment=PANEL_RESTART_BACKOFF=20
+
+# 公网 HTTPS 部署时打开（Token / 密钥请写在 panel.env，不要提交到仓库）
+# Environment=PANEL_COOKIE_SECURE=1
+# Environment=PANEL_TRUST_PROXY=1
+# Environment=PANEL_ALLOWED_ORIGINS=https://panel.example.com
+EnvironmentFile=-/opt/chaoxing/panel.env
+
+# 必须单 worker：账号运行状态保存在进程内存中
+ExecStart=/opt/chaoxing/.venv/bin/gunicorn \
+    --workers 1 \
+    --threads 8 \
+    --timeout 120 \
+    --graceful-timeout 20 \
+    --access-logfile - \
+    --bind 127.0.0.1:8080 \
+    panel:app
+
+Restart=on-failure
+RestartSec=5
+KillSignal=SIGTERM
+
+# 加固
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=full
+ProtectHome=read-only
+ReadWritePaths=/opt/chaoxing/data
+
+[Install]
+WantedBy=multi-user.target

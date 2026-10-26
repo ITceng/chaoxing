@@ -12,6 +12,9 @@
 - **暂停 / 继续 / 停止**：只作用于目标账号；视频循环、重试等待、章节学习次数等耗时操作都会在安全点响应。
 - **全局限制**：`max_concurrent_accounts` 控制同时运行的账号数；超出的账号显示“排队中”，停止一个后自动补位。
 - **启动面板**：浏览器中查看账号状态、章节进度、当前任务、日志；支持启动全部/暂停全部/停止全部。
+- **无人值守**：面板进程/服务器重启后自动开始 `autostart` 账号；账号失败按指数退避自动重启（有上限）；
+  手动停止的账号不会被自动拉起。手机浏览器即可远程暂停/停止单个账号，详见
+  [`docs/mobile-control.md`](mobile-control.md)。
 - **API 安全**：管理员登录 + CSRF + Origin 校验 + 登录限流/锁定 + 可选 API Key + 审计日志。
 - **敏感信息脱敏**：日志中的 Cookie / token / 通知 URL 自动脱敏；账号密码、Cookie、题库 token 使用 Fernet 加密落盘。
 
@@ -135,6 +138,24 @@ WantedBy=multi-user.target
 
 > **必须 `--workers 1`**。账号运行状态在进程内存中；多 worker 会让同一账号被重复启动，也会让轮询落到不同进程而看不到状态。需要横向扩展时应改用 Redis/数据库做分布式状态，而不是简单加 worker。
 
+### 3.3.1 无人值守相关环境变量
+
+```bash
+PANEL_AUTOSTART=1              # 1=开启自动调度（默认），0=只手动控制
+PANEL_SUPERVISOR_INTERVAL=5    # 监督线程检查间隔（秒）
+PANEL_MAX_AUTO_RESTARTS=5      # 每个账号每滚动 1 小时最多自动重启次数
+PANEL_RESTART_BACKOFF=20       # 首次重启等待秒数，之后指数退避，上限 600 秒
+```
+
+行为约定：
+
+- 面板启动（或收到第一个请求）后，`autostart` 账号自动开始；
+- 账号运行失败（登录失败、章节全部失败、异常）→ 自动重启，间隔 20s/40s/80s…；
+- 达到上限后账号停在「失败」并提示「自动重启已达上限」，不会无限重试；
+- 你手动点「停止」的账号 `user_stopped=True`，**永远**不会被自动重启，直到你手动「启动」。
+
+`deploy/chaoxing-panel.service` 已包含以上配置；Docker Compose 也已透传。
+
 ### 3.4 Docker
 
 ```bash
@@ -165,6 +186,7 @@ docker compose -f docker-compose.panel.yml logs -f panel
 | 日志 | 日志上下文绑定账号 ID，内存缓冲 + `data/logs/<account_id>.log` |
 | 章节调度 | 默认 `course_serial=true`：课程内章节串行、课程之间并行；`jobs` 只控制同一账号内的章节并发 |
 | 全局并发 | `max_concurrent_accounts`（默认 2）：超出时排队，不影响已运行账号 |
+| 无人值守 | 每个账号 `autostart` / `auto_restart` 开关；手动停止的账号不会被自动重启 |
 
 行为示例：
 
@@ -224,6 +246,7 @@ curl -H "X-API-Key: $PANEL_API_KEY" https://panel.example.com/api/accounts
 | 方法 | 路径 | 说明 |
 |---|---|---|
 | GET | `/api/health` | 健康检查（无需鉴权，泄露信息极少） |
+| GET | `/api/meta` | 版本、题库列表、`supervisor` 是否在运行（需登录） |
 | GET | `/api/auth/status` | 是否已初始化/已登录 |
 | POST | `/api/auth/setup` | 首次初始化管理员；可用 `PANEL_SETUP_TOKEN` 保护 |
 | POST | `/api/auth/login` | 登录（限流 + 失败锁定） |
@@ -273,6 +296,7 @@ curl -H "X-API-Key: $PANEL_API_KEY" https://panel.example.com/api/accounts
 | 敏感日志 | Cookie/Authorization/token/通知 URL 统一脱敏；账号日志分文件 |
 | 审计 | 登录、账号操作、设置修改、启动/停止写入 `data/audit.log` |
 | 容器 | 非 root、`no-new-privileges`、`.dockerignore` 排除本地凭据 |
+| 无人值守 | 手动停止的账号不会被自动重启；自动重启有次数上限，防止账号密码错误时被反复锁死 |
 
 ### 6.2 未实现 / 需要注意
 

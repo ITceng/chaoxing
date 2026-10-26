@@ -160,10 +160,51 @@ table.audit th { color: var(--muted); font-weight: 600; }
 }
 .toast.error { background: var(--danger); }
 
+/* ---------------------------------------------------- 手机端（远程管理） */
 @media (max-width: 720px) {
-  .topbar { padding: 12px; }
-  .container { padding: 16px 12px 50px; }
-  .summary-grid { grid-template-columns: repeat(2, 1fr); }
+  body { font-size: 15px; }
+  .topbar {
+    padding: 10px 12px; gap: 10px; align-items: flex-start;
+    /* 手机竖屏：品牌与操作按钮换行，都在首屏可见 */
+  }
+  .top-actions { width: 100%; gap: 6px; }
+  .top-actions button { flex: 1 1 auto; min-height: 42px; font-size: 13px; padding: 8px 10px; }
+  .container { padding: 14px 12px 56px; }
+  .summary-grid { grid-template-columns: repeat(2, 1fr); gap: 8px; }
+  .stat { padding: 10px 12px; }
+  .stat span { font-size: 20px; }
   .grid2, .grid3 { grid-template-columns: 1fr; }
-  .accounts { grid-template-columns: 1fr; }
+  .accounts { grid-template-columns: 1fr; gap: 10px; }
+  .card-head { padding: 12px 14px 8px; }
+  .card-body { padding: 0 14px 12px; gap: 10px; }
+
+  /* 主操作按钮加大点击区域，避免误触 */
+  .card-actions { gap: 8px; }
+  .card-actions button { min-height: 44px; padding: 10px 14px; font-size: 14px; flex: 1 1 30%; }
+  .card-actions button.danger-ghost { flex: 1 1 22%; }
+
+  /* 弹窗铺满屏幕，表单可滚动 */
+  .modal-backdrop { padding: 0; place-items: stretch; }
+  .modal, .modal.wide {
+    width: 100%; max-height: 100vh; height: 100%; border-radius: 0;
+  }
+  .modal-head { padding: 14px; }
+  .modal-body { padding: 14px; }
+  .modal-foot { padding: 12px 14px calc(12px + env(safe-area-inset-bottom)); }
+  .modal-foot button { min-height: 44px; }
+  .logs { height: min(58vh, 420px); font-size: 12px; }
+
+  /* 输入框 16px 防止 iOS 聚焦时自动放大 */
+  input, select, textarea { font-size: 16px; padding: 10px 12px; }
+  .check { font-size: 14px; }
+  button { min-height: 40px; }
+  .auth { padding: 16px; }
+  .auth-card { padding: 20px; }
+  table.audit { font-size: 12px; }
+  .toast { right: 10px; left: 10px; bottom: 12px; max-width: none; }
+}
+
+@media (max-width: 380px) {
+  .summary-grid { grid-template-columns: 1fr 1fr; }
+  .card-actions button { flex: 1 1 45%; }
 }

@@ -745,7 +745,11 @@ def filter_courses(all_course, course_list, interactive: bool | None = None):
         except EOFError as e:
             raise InputFormatError("未读取到课程列表输入") from e
 
-    if any(item in {"*", "all", "ALL"} for item in course_list):
+    want_all = any(item in {"*", "all", "ALL"} for item in course_list)
+    if want_all:
+        if not all_course:
+            logger.warning("账号下没有任何课程（可能未选课或登录状态异常），没有可学习的课程")
+            return []
         course_list = [course["courseId"] for course in all_course]
 
     course_task = []
@@ -757,6 +761,10 @@ def filter_courses(all_course, course_list, interactive: bool | None = None):
             seen_keys.add(key)
 
     if not course_task:
+        if not all_course:
+            raise InputFormatError(
+                f"账号下没有任何课程，无法匹配指定课程 ID: {','.join(map(str, course_list))}"
+            )
         available = ", ".join(f"{c['courseId']}({c['title']})" for c in all_course[:20])
         raise InputFormatError(
             f"指定的课程 ID 在账号下不存在: {','.join(map(str, course_list))}。可用课程: {available}"
