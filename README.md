@@ -116,6 +116,9 @@ PANEL_DATA_DIR=./data PANEL_HOST=127.0.0.1 PANEL_PORT=8080 python panel.py
 - 登录鉴权、CSRF、Origin 校验、登录限流与锁定、可选 `PANEL_API_KEY`；
 - 提供 Docker / systemd / Nginx HTTPS 部署示例。
 
+本地电脑运行（Windows/macOS/Linux 详细步骤、一键启动脚本）见
+[`docs/local-setup.md`](docs/local-setup.md)。
+
 完整部署与安全说明见 [`docs/panel-deployment.md`](docs/panel-deployment.md)，
 手机远程管理与无人值守说明见 [`docs/mobile-control.md`](docs/mobile-control.md)。
 

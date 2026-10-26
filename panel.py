@@ -683,6 +683,7 @@ def main() -> int:
     parser.add_argument("--port", type=int, default=PANEL_PORT, help="监听端口（默认 8080）")
     parser.add_argument("--init-admin", action="store_true", help="交互式初始化管理员账号")
     parser.add_argument("--debug", action="store_true", help="Flask debug 模式")
+    parser.add_argument("--open", action="store_true", help="启动后自动用浏览器打开面板")
     args = parser.parse_args()
 
     if args.init_admin:
@@ -713,6 +714,12 @@ def main() -> int:
     if os.environ.get("PANEL_AUTOSTART", "1") == "1":
         app.extensions["chaoxing_panel"]["manager"].start_supervisor()
     logger.info(f"面板启动: http://{args.host}:{args.port}")
+    if args.open:
+        import threading
+        import webbrowser
+
+        host = "127.0.0.1" if args.host in ("0.0.0.0", "::") else args.host
+        threading.Timer(1.5, lambda: webbrowser.open(f"http://{host}:{args.port}")).start()
     app.run(host=args.host, port=args.port, debug=args.debug or PANEL_DEBUG,
             threaded=True, use_reloader=False)
     return 0
