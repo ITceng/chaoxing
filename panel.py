@@ -119,6 +119,7 @@ def create_app(data_dir: Optional[Path] = None, supervisor: bool = False) -> Fla
     api_limiter = SlidingWindowLimiter()
 
     app.extensions["chaoxing_panel"] = {
+        "data_dir": data_dir,
         "secret_box": secret_box,
         "accounts": accounts,
         "settings": settings,
@@ -318,6 +319,12 @@ def create_app(data_dir: Optional[Path] = None, supervisor: bool = False) -> Fla
             return api_error("Origin 不被允许", 403)
         if not auth.configured:
             return api_error("面板尚未初始化", 409)
+        # 管理员密码被外部重置后：清除失败锁定，避免刚重置完仍被锁死
+        version = auth.session_version
+        if app.config.get("_auth_version") != version:
+            app.config["_auth_version"] = version
+            login_window.clear()
+            login_ip_limiter.clear()
         ip = client_ip()
         allowed, retry_after = login_ip_limiter.allow(f"login:{ip}", 10, 300)
         if not allowed:
@@ -675,6 +682,77 @@ def create_app(data_dir: Optional[Path] = None, supervisor: bool = False) -> Fla
 app = create_app(supervisor=True)
 
 
+def apply_admin_reset(auth: PanelAuth, username: str, password: str) -> tuple[bool, str]:
+    """写入新的管理员账号；成功返回 (True, 提示)，失败返回 (False, 原因)."""
+    try:
+        auth.set_admin(username, password)
+    except ValueError as e:
+        return False, f"重置失败: {e}"
+    return True, f"管理员已更新为 {auth.username}，所有旧会话已失效"
+
+
+def _panel_reachable(port: int) -> bool:
+    """检测本机是否已有面板进程在跑（用于提示必须重启才能生效）."""
+    import urllib.request
+
+    try:
+        with urllib.request.urlopen(f"http://127.0.0.1:{port}/api/health", timeout=1.5) as resp:
+            return resp.status == 200
+    except Exception:  # noqa: BLE001 - 只是探测
+        return False
+
+
+def reset_admin_command(app: Flask, port: int = PANEL_PORT) -> int:
+    """`--reset-admin`：忘记密码时在服务器/本机重置管理员."""
+    import getpass
+
+    info = app.extensions["chaoxing_panel"]
+    auth: PanelAuth = info["auth"]
+    print("=" * 52)
+    print("  重置面板管理员")
+    print("=" * 52)
+    print(f"数据目录  : {info.get('data_dir')}")
+    print(f"管理员文件: {auth.path}")
+    if auth.configured:
+        print(f"当前用户名: {auth.username}")
+    else:
+        print("当前状态  : 尚未初始化，本次将直接创建管理员")
+    print()
+
+    env_user = os.environ.get("PANEL_ADMIN_USER", "").strip()
+    env_password = os.environ.get("PANEL_ADMIN_PASSWORD", "")
+    if env_user and env_password:
+        username, password = env_user, env_password
+        print("使用环境变量 PANEL_ADMIN_USER / PANEL_ADMIN_PASSWORD")
+    else:
+        if not sys.stdin.isatty():
+            print("当前不是交互式终端，无法输入密码。")
+            print("请改用环境变量方式（注意保留引号）：")
+            print('  PANEL_ADMIN_USER=admin PANEL_ADMIN_PASSWORD="新密码至少10位" python panel.py --reset-admin')
+            return 2
+        default_user = auth.username if auth.configured else "admin"
+        username = input(f"管理员用户名 [{default_user}]: ").strip() or default_user
+        password = getpass.getpass("新密码（至少 10 位）: ")
+        confirm = getpass.getpass("再输入一次: ")
+        if password != confirm:
+            print("两次输入不一致，未做任何修改。")
+            return 1
+
+    ok, message = apply_admin_reset(auth, username, password)
+    print(("✅ " if ok else "❌ ") + message)
+    if not ok:
+        return 1
+
+    if _panel_reachable(port):
+        print()
+        print("面板正在运行：新密码已立即生效，无需重启。")
+        print("旧密码已失效，已登录的会话会被要求重新登录（连续输错造成的临时锁定也已清除）。")
+    else:
+        print("现在启动面板即可用新密码登录。")
+    print("账号、课程、题库、通知等数据都不受影响。")
+    return 0
+
+
 def main() -> int:
     import argparse
 
@@ -682,6 +760,8 @@ def main() -> int:
     parser.add_argument("--host", default=PANEL_HOST, help="监听地址（默认 127.0.0.1）")
     parser.add_argument("--port", type=int, default=PANEL_PORT, help="监听端口（默认 8080）")
     parser.add_argument("--init-admin", action="store_true", help="交互式初始化管理员账号")
+    parser.add_argument("--reset-admin", action="store_true",
+                        help="重置管理员密码（忘记密码时用；可用 PANEL_ADMIN_USER/PANEL_ADMIN_PASSWORD 免交互）")
     parser.add_argument("--debug", action="store_true", help="Flask debug 模式")
     parser.add_argument("--open", action="store_true", help="启动后自动用浏览器打开面板")
     args = parser.parse_args()
@@ -691,7 +771,7 @@ def main() -> int:
 
         auth = app.extensions["chaoxing_panel"]["auth"]
         if auth.configured:
-            print("管理员已初始化，如需重置请删除 data/admin.json")
+            print("管理员已初始化。忘记密码请执行：python panel.py --reset-admin")
             return 1
         username = input("管理员用户名: ").strip()
         password = getpass.getpass("管理员密码（至少 10 位）: ")
@@ -706,6 +786,9 @@ def main() -> int:
             return 1
         print("管理员初始化完成")
         return 0
+
+    if args.reset_admin:
+        return reset_admin_command(app, port=args.port)
 
     if not API_KEY:
         logger.warning("未设置 PANEL_API_KEY：远程 API 调用只能使用登录会话（浏览器）")

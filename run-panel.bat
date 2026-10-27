@@ -58,8 +58,16 @@ echo.
 echo 面板地址： http://127.0.0.1:8080  （如需换端口：run-panel.bat --port 8081）
 echo 首次打开需要创建管理员账号（密码至少 10 位）。
 echo 关闭本窗口或按 Ctrl+C 即可停止面板。
+echo 忘记密码：在本窗口按 Ctrl+C 停止后，执行   run-panel.bat --reset-admin
 echo.
-".venv\Scripts\python.exe" panel.py --open %*
+rem 管理命令（--reset-admin / --init-admin）执行完就退出，不需要打开浏览器
+set "OPEN_FLAG=--open"
+for %%A in (%*) do (
+    if /I "%%~A"=="--reset-admin" set "OPEN_FLAG="
+    if /I "%%~A"=="--init-admin" set "OPEN_FLAG="
+)
+
+".venv\Scripts\python.exe" panel.py %OPEN_FLAG% %*
 
 echo.
 echo 面板已退出。

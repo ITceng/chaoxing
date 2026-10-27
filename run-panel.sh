@@ -53,6 +53,13 @@ done
 echo
 echo "面板地址： http://${SHOW_HOST/0.0.0.0/127.0.0.1}:${SHOW_PORT}"
 echo "首次打开需要创建管理员账号（密码至少 10 位）。"
-echo "按 Ctrl+C 停止面板。"
+echo "按 Ctrl+C 停止面板；忘记密码执行：./run-panel.sh --reset-admin"
 echo
-exec "$PY_RUN" panel.py --open "$@"
+OPEN_FLAG=--open
+for arg in "$@"; do
+  case "$arg" in
+    --reset-admin|--init-admin) OPEN_FLAG="" ;;   # 这两个是管理命令，启动完就退出
+  esac
+done
+
+exec "$PY_RUN" panel.py $OPEN_FLAG "$@"

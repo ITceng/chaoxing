@@ -185,6 +185,17 @@ PANEL_ALLOWED_ORIGINS=https://panel.example.com
 - 到达 5 次/小时上限后会停止自动重启并显示「自动重启已达上限」；
 - 看该账号日志（手机也能看）：登录失败、题库 token、Cookie 过期是最常见原因。
 
+**问：管理员密码忘了，手机上登录不了？**
+在服务器上执行（不需要先登录面板）：
+
+```bash
+cd /opt/chaoxing
+PANEL_DATA_DIR=/opt/chaoxing/data .venv/bin/python panel.py --reset-admin
+```
+
+新密码**立即生效**，旧密码失效、所有已登录的手机/电脑退回登录页，连续输错造成的锁定也会被清除。
+Windows/macOS 本机、Docker、用户名也忘了等情况，见 [`docs/local-setup.md`](local-setup.md) 的 4.6。
+
 **问：手机上点停止没反应？**
 - 若状态是「停止中」，说明正在等当前 HTTP 请求返回（最长 15 秒超时）；
 - 若接口返回 401/403，是会话过期或 CSRF 失效，重新登录即可。

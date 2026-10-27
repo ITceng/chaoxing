@@ -171,6 +171,10 @@ class SlidingWindowLimiter:
         with self._lock:
             self._events.pop(key, None)
 
+    def clear(self) -> None:
+        with self._lock:
+            self._events.clear()
+
 
 class LoginThrottle:
     """登录失败锁定：同一 IP 或同一用户名连续失败后临时锁定."""
@@ -204,6 +208,12 @@ class LoginThrottle:
         with self._lock:
             self._failures.pop(key, None)
             self._locked_until.pop(key, None)
+
+    def clear(self) -> None:
+        """清空所有失败记录（管理员密码被重置后调用）."""
+        with self._lock:
+            self._failures.clear()
+            self._locked_until.clear()
 
 
 def get_client_ip(remote_addr: Optional[str], headers: Any, trust_proxy: bool = False) -> str:

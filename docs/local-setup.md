@@ -162,7 +162,7 @@ python3 -m venv .venv
 - 密码：**至少 10 位**（比如 `My-Panel-2026!`）；
 - 创建后自动登录。
 
-> 密码忘了怎么办：关闭面板，删除 `data/admin.json`，重启后会重新进入初始化页面（已添加的账号数据不会丢）。
+> 密码忘了怎么办：见下面的 **4.6**，一条命令就能重置，不需要删文件，也不会动账号数据。
 
 ### 4.2 添加第一个账号
 
@@ -204,6 +204,89 @@ python3 -m venv .venv
 
 - 关掉运行脚本的窗口，或在该窗口按 `Ctrl + C`；
 - 下次再双击 `run-panel.bat` / 执行 `./run-panel.sh` 即可，账号配置都在，不用重配。
+
+### 4.6 忘记管理员密码 / 用户名怎么办 ⭐
+
+**不要重装、不要删 `data/`**，用重置命令即可。它会打印当前用户名（忘了用户名也能看到），并设置新密码。
+
+#### Windows
+
+在项目文件夹的地址栏输入 `cmd` 回车，然后执行任意一条：
+
+```bat
+run-panel.bat --reset-admin
+:: 或者（已装好依赖时更快）
+.venv\Scripts\python.exe panel.py --reset-admin
+```
+
+#### macOS / Linux
+
+```bash
+./run-panel.sh --reset-admin
+# 或者
+.venv/bin/python panel.py --reset-admin
+```
+
+执行过程：
+
+```text
+====================================================
+  重置面板管理员
+====================================================
+数据目录  : /Users/you/chaoxing/data
+管理员文件: /Users/you/chaoxing/data/admin.json
+当前用户名: admin              ← 忘了用户名看这里
+
+管理员用户名 [admin]:          ← 直接回车沿用原名
+新密码（至少 10 位）:          ← 输入时不显示字符，正常现象
+再输入一次:
+✅ 管理员已更新为 admin，所有旧会话已失效
+现在启动面板即可用新密码登录。
+账号、课程、题库、通知等数据都不受影响。
+```
+
+然后正常启动面板，用新密码登录即可。
+
+#### 不想交互输入（脚本 / 远程 / 容器）
+
+```bash
+PANEL_ADMIN_USER=admin PANEL_ADMIN_PASSWORD="新密码至少10位" python panel.py --reset-admin
+```
+
+Windows cmd：
+
+```bat
+set PANEL_ADMIN_USER=admin
+set PANEL_ADMIN_PASSWORD=New-Password-2026
+.venv\Scripts\python.exe panel.py --reset-admin
+```
+
+Docker：
+
+```bash
+docker compose -f docker-compose.panel.yml exec \
+  -e PANEL_ADMIN_USER=admin -e PANEL_ADMIN_PASSWORD=New-Password-2026 \
+  panel python panel.py --reset-admin
+```
+
+#### 重置后会怎样
+
+| 项目 | 结果 |
+|---|---|
+| 新密码 | **立即生效**，面板不用重启 |
+| 旧密码 | 立即失效 |
+| 已登录的浏览器/手机 | 全部被要求重新登录 |
+| 连续输错导致的临时锁定 | 自动清除（不用等 15 分钟） |
+| 超星账号、课程、题库、通知、日志 | **完全不受影响** |
+
+补充说明：
+
+- 如果你的面板是用自定义数据目录启动的（环境变量 `PANEL_DATA_DIR`），**重置时也要带上同样的变量**，
+  否则改的是另一个目录里的 `admin.json`。命令输出里的「管理员文件」路径可以用来核对。
+- 用户名记不清：直接用上面的命令，输出会打印「当前用户名」。
+- 实在连命令都不想用：关闭面板 → 删除 `data/admin.json` → 重启面板，会回到「初始化管理员」页面
+  （只丢失管理员账号密码，超星账号数据都还在）。
+- 管理员登录不是超星的账号密码，是你第一次打开面板时自己设置的密码，和超星账号无关。
 
 ---
 
@@ -341,7 +424,12 @@ python panel.py --port 8081
 **Q5：`run-panel.bat` 一闪而过**
 在文件夹地址栏输入 `cmd` 回车，然后手动执行 `run-panel.bat`，就能看到完整报错（脚本本身最后也会 `pause`）。
 
-**Q6：面板能打开但账号一直"失败"**
+**Q6：管理员密码忘了 / 用户名忘了，登录不了**
+看 **4.6**：执行 `run-panel.bat --reset-admin`（Windows）或 `./run-panel.sh --reset-admin`，
+输入新密码即可；旧连接会被踢出，账号数据不受影响。重置后仍然提示"失败次数过多"是被临时锁定，
+重置会自动清除；如果还不行就等 15 分钟，或重启一次面板。
+
+**Q7：面板能打开但账号一直"失败"**
 看该账号「日志」：
 
 - `登录失败` / 需要验证码 → 密码错了或被风控，先在浏览器登录一次超星，或改用 Cookie 登录；
@@ -349,10 +437,10 @@ python panel.py --port 8081
 - `SSLError` / `ConnectionError` → 网络或代理问题，检查是否能正常访问超星网页；
 - 题库相关报错 → 检查 provider 名称、token、余额。
 
-**Q7：`data/` 里的 `secret.key` 被我删了**
+**Q8：`data/` 里的 `secret.key` 被我删了**
 `accounts.json` 里的密码/Cookie 就无法解密了，只能删掉账号重新添加。所以备份时务必连 `secret.key` 一起备份。
 
-**Q8：怎么更新到最新代码？**
+**Q9：怎么更新到最新代码？**
 ZIP 方式：重新下载解压覆盖（保留 `data/` 目录）；git 方式：
 
 ```bash
@@ -360,10 +448,10 @@ git pull
 .venv/bin/python -m pip install -r requirements-panel.txt   # 依赖有更新时
 ```
 
-**Q9：能不能关掉"无人值守"自动启动？**
+**Q10：能不能关掉"无人值守"自动启动？**
 可以。每个账号的编辑弹窗里取消「面板启动后自动开始」；或启动前设置环境变量 `PANEL_AUTOSTART=0`（Windows：`set PANEL_AUTOSTART=0` 再启动）。
 
-**Q10：电脑休眠后账号还跑吗？**
+**Q11：电脑休眠后账号还跑吗？**
 面板是普通进程，电脑睡眠/关机就停了。想 7×24 跑请放到服务器或小主机上，见 [`docs/mobile-control.md`](mobile-control.md) 与 [`docs/panel-deployment.md`](panel-deployment.md)。
 
 ---

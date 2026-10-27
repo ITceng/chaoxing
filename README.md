@@ -119,6 +119,8 @@ PANEL_DATA_DIR=./data PANEL_HOST=127.0.0.1 PANEL_PORT=8080 python panel.py
 本地电脑运行（Windows/macOS/Linux 详细步骤、一键启动脚本）见
 [`docs/local-setup.md`](docs/local-setup.md)。
 
+忘记管理员密码：`python panel.py --reset-admin`（立即生效，不影响已添加的账号）。
+
 完整部署与安全说明见 [`docs/panel-deployment.md`](docs/panel-deployment.md)，
 手机远程管理与无人值守说明见 [`docs/mobile-control.md`](docs/mobile-control.md)。
 

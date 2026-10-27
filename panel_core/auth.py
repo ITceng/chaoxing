@@ -22,19 +22,44 @@ class PanelAuth:
         self._data: dict[str, Any] = _read_json(self.path, {})
         if not isinstance(self._data, dict):
             self._data = {}
+        self._stamp = self._file_stamp()
+
+    def _file_stamp(self) -> tuple[int, int]:
+        try:
+            stat = self.path.stat()
+        except OSError:
+            return (0, 0)
+        return (stat.st_mtime_ns, stat.st_size)
+
+    def _reload_if_changed(self) -> None:
+        """admin.json 被外部修改（例如命令行 --reset-admin）后自动生效，无需重启面板."""
+        stamp = self._file_stamp()
+        if stamp == self._stamp:
+            return
+        with self._lock:
+            stamp = self._file_stamp()
+            if stamp == self._stamp:
+                return
+            data = _read_json(self.path, {})
+            if isinstance(data, dict):
+                self._data = data
+            self._stamp = stamp
 
     @property
     def configured(self) -> bool:
+        self._reload_if_changed()
         with self._lock:
             return bool(self._data.get("password_hash"))
 
     @property
     def username(self) -> str:
+        self._reload_if_changed()
         with self._lock:
             return str(self._data.get("username") or "admin")
 
     @property
     def session_version(self) -> int:
+        self._reload_if_changed()
         with self._lock:
             return int(self._data.get("session_version") or 1)
 
@@ -64,6 +89,7 @@ class PanelAuth:
             self._save()
 
     def verify(self, username: str, password: str) -> bool:
+        self._reload_if_changed()
         with self._lock:
             if not self.configured:
                 return False
@@ -87,3 +113,4 @@ class PanelAuth:
 
     def _save(self) -> None:
         _atomic_write(self.path, json.dumps(self._data, ensure_ascii=False, indent=2))
+        self._stamp = self._file_stamp()

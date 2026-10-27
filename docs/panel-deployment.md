@@ -156,6 +156,15 @@ PANEL_RESTART_BACKOFF=20       # 首次重启等待秒数，之后指数退避�
 
 `deploy/chaoxing-panel.service` 已包含以上配置；Docker Compose 也已透传。
 
+### 3.3.2 管理命令
+
+| 命令 | 用途 |
+|---|---|
+| `python panel.py` | 启动面板 |
+| `python panel.py --open` | 启动并自动打开浏览器（本机使用） |
+| `python panel.py --init-admin` | 首次初始化管理员（交互式） |
+| `python panel.py --reset-admin` | **忘记密码时重置管理员**（立即生效，可用 `PANEL_ADMIN_USER`/`PANEL_ADMIN_PASSWORD` 免交互） |
+
 ### 3.4 Docker
 
 ```bash
@@ -335,7 +344,8 @@ data/
 - **备份**：`data/` 整个目录（尤其 `secret.key` + `accounts.json`）。
 - **迁移**：保持 `PANEL_DATA_DIR` 不变；更换 `secret.key` 会导致旧凭据无法解密。
 - **删除账号**：面板会先停止运行器，再删除该账号的 cookie/日志目录；`audit.log` 保留操作记录。
-- **重置面板**：停止面板，删除 `data/admin.json`（保留账号数据）后重新初始化；删除整个 `data/` 会丢失账号。
+- **重置管理员密码**：`python panel.py --reset-admin`（推荐，立即生效且不影响账号数据）；
+  或在停止面板后删除 `data/admin.json` 重新初始化；删除整个 `data/` 会丢失账号。
 
 文件权限建议：
 
@@ -365,6 +375,27 @@ A：不会。运行中的账号在启动时读取配置快照；修改后需停�
 
 **Q：`PANEL_API_KEY` 怎么轮换？**
 A：替换环境变量并重启面板；旧 key 立即失效。轮换不会影响浏览器会话（除非同时修改了 session secret）。
+
+**Q：管理员密码忘了 / 用户名忘了？**
+在服务器上用同一个 `PANEL_DATA_DIR` 执行：
+
+```bash
+cd /opt/chaoxing
+PANEL_DATA_DIR=/opt/chaoxing/data .venv/bin/python panel.py --reset-admin
+# 免交互（容器/脚本）：
+PANEL_DATA_DIR=/opt/chaoxing/data PANEL_ADMIN_USER=admin \
+  PANEL_ADMIN_PASSWORD='New-Password-2026' .venv/bin/python panel.py --reset-admin
+
+# Docker
+docker compose -f docker-compose.panel.yml exec \
+  -e PANEL_ADMIN_USER=admin -e PANEL_ADMIN_PASSWORD='New-Password-2026' \
+  panel python panel.py --reset-admin
+```
+
+- 输出会打印当前用户名与 `admin.json` 的实际路径，先确认改的是对的数据目录；
+- 新密码**立即生效**（`PanelAuth` 会热加载 `admin.json`），旧密码失效、所有旧会话被登出、失败锁定被清除；
+- 超星账号、题库、通知、审计日志都不受影响；
+- 兜底方案：停面板 → 删 `data/admin.json` → 重启回到初始化页（只丢管理员账号）。
 
 **Q：为什么不能 `gunicorn -w 4`？**
 A：每个 worker 进程都有独立的 `RunnerManager` 和内存状态，会把同一账号启动 4 次。必须 `-w 1`；要扩展请先做分布式状态层。
