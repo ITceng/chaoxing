@@ -51,12 +51,34 @@
     return node;
   }
 
-  function toast(message, isError) {
+  function toast(message, kind) {
     const node = $("#toast");
     node.textContent = String(message);
-    node.className = "toast" + (isError ? " error" : "");
+    let extra = "";
+    if (kind === true || kind === "error") extra = " error";
+    else if (kind === "ok") extra = " ok";
+    node.className = "toast" + extra;
     window.clearTimeout(toast._timer);
     toast._timer = window.setTimeout(() => node.classList.add("hidden"), 3200);
+  }
+
+  async function testConnection(ev, payload) {
+    const btn = ev.currentTarget;
+    btn.disabled = true;
+    const oldText = btn.textContent;
+    btn.textContent = "测试中…";
+    try {
+      const res = await api("/api/settings/test-connection", {
+        method: "POST",
+        body: payload,
+      });
+      toast(res.msg || (res.ok ? "连接成功" : "连接失败"), res.ok ? "ok" : "error");
+    } catch (e) {
+      toast(e.message, true);
+    } finally {
+      btn.disabled = false;
+      btn.textContent = oldText;
+    }
   }
 
   async function api(path, options) {
@@ -652,11 +674,32 @@
         field("请求间隔（秒）", interval),
         field("HTTP 代理", proxy),
         field("GO题 Authorization", goAuth),
+        h("div", { style: "display:flex;gap:8px;align-items:flex-end" },
+          h("button", { type: "button", class: "small", text: "测试 AI 连接",
+            onclick: (ev) => testConnection(ev, {
+              provider: "AI",
+              endpoint: endpoint.value.trim(),
+              key: key.value,
+              model: model.value.trim(),
+              http_proxy: proxy.value.trim(),
+              min_interval_seconds: Number(interval.value) || 3,
+            }) }),
+        ),
       ),
       h("div", { class: "grid3" },
         field("硅基流动 Key", siliconKey),
         field("硅基流动模型", siliconModel),
         field("硅基流动 Endpoint", siliconEndpoint),
+        h("div", {},
+          h("button", { type: "button", class: "small", text: "测试硅基流动连接",
+            onclick: (ev) => testConnection(ev, {
+              provider: "SiliconFlow",
+              siliconflow_endpoint: siliconEndpoint.value.trim(),
+              siliconflow_key: siliconKey.value,
+              siliconflow_model: siliconModel.value.trim(),
+              min_interval_seconds: Number(interval.value) || 3,
+            }) }),
+        ),
       ),
 
       h("div", { class: "section-title", text: "外部通知" }),

@@ -159,6 +159,7 @@ table.audit th { color: var(--muted); font-weight: 600; }
   box-shadow: var(--shadow); font-size: 13px; overflow-wrap: anywhere;
 }
 .toast.error { background: var(--danger); }
+.toast.ok { background: #157a4c; }
 
 /* ---------------------------------------------------- 手机端（远程管理） */
 @media (max-width: 720px) {

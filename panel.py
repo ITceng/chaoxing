@@ -13,10 +13,14 @@ import atexit
 import json
 import os
 import secrets
+import ipaddress
+import requests
 import shutil
 import socket
 import sys
+import threading
 import time
+import urllib.parse
 from functools import wraps
 from pathlib import Path
 from typing import Any, Callable, Optional
@@ -26,7 +30,7 @@ from markupsafe import escape
 from werkzeug.exceptions import HTTPException
 from werkzeug.middleware.proxy_fix import ProxyFix
 
-from api.answer import PROVIDER_REGISTRY
+from api.answer import AI, PROVIDER_REGISTRY, SiliconFlow, TikuGo
 from api.logger import clear_account_logs, logger
 from panel_core.auth import PanelAuth
 from panel_core.runner import RunnerManager
@@ -252,6 +256,127 @@ def create_app(data_dir: Optional[Path] = None, supervisor: bool = False) -> Fla
         token = session.get("csrf", "")
         supplied = request.headers.get("X-CSRF-Token", "")
         return bool(token) and bool(supplied) and constant_time_equal(token, supplied)
+
+    # ----------------------------------- AI / 题库连接探测（只探测，不保存；带 SSRF 防御） #
+    _PRIVATE_NETS = (
+        ipaddress.ip_network("127.0.0.0/8"),
+        ipaddress.ip_network("10.0.0.0/8"),
+        ipaddress.ip_network("172.16.0.0/12"),
+        ipaddress.ip_network("192.168.0.0/16"),
+        ipaddress.ip_network("169.254.0.0/16"),
+        ipaddress.ip_network("::1/128"),
+        ipaddress.ip_network("fe80::/10"),
+        ipaddress.ip_network("fc00::/7"),
+    )
+
+    def _ip_is_private(ip_text: str) -> bool:
+        try:
+            addr = ipaddress.ip_address(ip_text)
+        except ValueError:
+            return False
+        return any(addr in net for net in _PRIVATE_NETS)
+
+    def _resolve_ips(hostname: str):
+        try:
+            ipaddress.ip_address(hostname)
+            return [hostname]
+        except ValueError:
+            pass
+        try:
+            infos = socket.getaddrinfo(hostname, None, type=socket.SOCK_STREAM)
+        except OSError:
+            return []
+        return sorted({info[4][0] for info in infos})
+
+    def _assert_public_url(url: str, what: str, allow_schemes=("https",)) -> str:
+        """只允许公网地址，禁止探测本机/内网，避免服务器被用作 SSRF 跳板."""
+        try:
+            parsed = urllib.parse.urlparse(url)
+        except Exception:
+            raise ValueError(f"{what} 地址格式不正确")
+        if parsed.scheme.lower() not in allow_schemes:
+            raise ValueError(f"{what} 必须使用 {'/'.join(allow_schemes)} 地址")
+        host = parsed.hostname or ""
+        if not host:
+            raise ValueError(f"{what} 缺少主机名")
+        for ip in _resolve_ips(host):
+            if _ip_is_private(ip):
+                raise ValueError(f"{what} 不得指向本机或内网地址（{host} -> {ip}）")
+        return url
+
+    def _run_with_timeout(func, timeout: float = 25.0):
+        box = {"ok": False, "msg": "未知错误"}
+
+        def target():
+            try:
+                ok, msg = func()
+                box["ok"], box["msg"] = bool(ok), str(msg or "连接成功")
+            except Exception as exc:  # 网络/鉴权/超时等，全部转成用户可见的提示
+                box["ok"], box["msg"] = False, f"连接异常：{type(exc).__name__}"
+
+        thread = threading.Thread(target=target, daemon=True)
+        thread.start()
+        thread.join(timeout)
+        if thread.is_alive():
+            return False, "连接超时，请检查网络或 Endpoint 地址"
+        return box["ok"], box["msg"]
+
+    def _probe_ai(endpoint, key, model, http_proxy, min_interval_seconds):
+        if endpoint:
+            _assert_public_url(endpoint, "AI Endpoint")
+        if http_proxy:
+            _assert_public_url(http_proxy, "HTTP 代理", ("http", "https"))
+        ai = AI()  # 不读 config.ini，直接覆盖属性探测
+        ai.endpoint = endpoint or "https://api.openai.com/v1"
+        ai.key = key
+        ai.model = model or "gpt-3.5-turbo"
+        ai.http_proxy = http_proxy or None
+        ai.min_interval_seconds = min_interval_seconds
+        return _run_with_timeout(ai.check_llm_connection)
+
+    def _probe_siliconflow(endpoint, key, model, min_interval_seconds):
+        if not endpoint:
+            endpoint = "https://api.siliconflow.cn/v1/chat/completions"
+        _assert_public_url(endpoint, "硅基流动 Endpoint")
+        sf = SiliconFlow()
+        sf.api_endpoint = endpoint
+        sf.api_key = key
+        sf.model_name = model or "deepseek-ai/DeepSeek-V3"
+        sf.min_interval = min_interval_seconds
+        return _run_with_timeout(sf.check_llm_connection)
+
+    def _probe_tikugo(go_authorization):
+        go = TikuGo()
+        go._headers["Authorization"] = go_authorization
+        try:
+            res = requests.post(
+                go.api,
+                data={"question": "连接测试"},
+                headers=go._headers,
+                verify=True,
+                timeout=15,
+            )
+        except Exception as exc:
+            return False, f"GO 题连接异常：{type(exc).__name__}"
+        if res.status_code == 200:
+            return True, "连接成功（已抵达 GO 题接口）"
+        return False, f"GO 题接口返回状态码 {res.status_code}"
+
+    def _probe_connection(provider: str, **fields):
+        key = provider.upper()
+        if key == "AI":
+            return _probe_ai(
+                fields["endpoint"], fields["key"], fields["model"],
+                fields["http_proxy"], fields["min_interval_seconds"],
+            )
+        if key == "SILICONFLOW":
+            return _probe_siliconflow(
+                fields["silicon_endpoint"], fields["silicon_key"],
+                fields["silicon_model"], fields["min_interval_seconds"],
+            )
+        if key == "TIKUGO":
+            return _probe_tikugo(fields["go_authorization"])
+        return False, f"不支持的连接测试提供商：{provider}"
 
     def require_auth(write: bool = False):
         def decorator(fn: Callable):
@@ -853,6 +978,50 @@ def create_app(data_dir: Optional[Path] = None, supervisor: bool = False) -> Fla
         manager.update_limit(int(settings.get().get("max_concurrent_accounts", 2)))
         audit_write("settings.update", detail={"keys": sorted(data.keys())})
         return jsonify({"settings": settings.get_masked()})
+
+    @app.post("/api/settings/test-connection")
+    @require_auth()
+    def test_connection():
+        """测试 AI/题库连接：只做探测，不保存配置；始终返回 {ok, msg}."""
+        data = _account_payload()
+        if not isinstance(data, dict):
+            return api_error("请求体必须是 JSON 对象", 400)
+
+        provider = str(data.get("provider") or "AI").strip()
+        endpoint = str(data.get("endpoint") or "").strip()
+        key = str(data.get("key") or "")
+        model = str(data.get("model") or "").strip()
+        http_proxy = str(data.get("http_proxy") or "").strip()
+        try:
+            min_interval = max(0, int(data.get("min_interval_seconds") or 3))
+        except (TypeError, ValueError):
+            min_interval = 3
+        silicon_endpoint = str(data.get("siliconflow_endpoint") or "").strip()
+        silicon_key = str(data.get("siliconflow_key") or "")
+        silicon_model = str(data.get("siliconflow_model") or "").strip()
+        go_authorization = str(data.get("go_authorization") or "").strip()
+
+        try:
+            ok, msg = _probe_connection(
+                provider,
+                endpoint=endpoint,
+                key=key,
+                model=model,
+                http_proxy=http_proxy,
+                min_interval_seconds=min_interval,
+                silicon_endpoint=silicon_endpoint,
+                silicon_key=silicon_key,
+                silicon_model=silicon_model,
+                go_authorization=go_authorization,
+            )
+        except ValueError as exc:  # 地址非法/指向内网等配置错误，直接返回友好提示
+            return jsonify({"ok": False, "msg": str(exc)})
+        except Exception as exc:  # 探测器内部应已兜底，这里再保一层
+            logger.exception("连接测试意外异常")
+            return jsonify({"ok": False, "msg": f"连接测试异常：{type(exc).__name__}"})
+
+        audit_write("settings.test_connection", detail={"provider": provider, "ok": bool(ok)})
+        return jsonify({"ok": bool(ok), "msg": msg})
 
     @app.get("/api/audit")
     @require_auth()
