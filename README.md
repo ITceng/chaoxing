@@ -120,6 +120,7 @@ PANEL_DATA_DIR=./data PANEL_HOST=127.0.0.1 PANEL_PORT=8080 python panel.py
 [`docs/local-setup.md`](docs/local-setup.md)。
 
 忘记管理员密码：`python panel.py --reset-admin`（立即生效，不影响已添加的账号）。
+打不开面板 / 看到 `Whitelabel Error Page`：执行 `python panel.py --doctor` 自检（多半是端口被别的程序占用）。
 
 完整部署与安全说明见 [`docs/panel-deployment.md`](docs/panel-deployment.md)，
 手机远程管理与无人值守说明见 [`docs/mobile-control.md`](docs/mobile-control.md)。

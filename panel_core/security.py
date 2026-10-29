@@ -10,7 +10,7 @@ import os
 import secrets
 import threading
 import time
-from collections import defaultdict, deque
+from collections import deque
 from pathlib import Path
 from typing import Any, Optional
 
@@ -149,16 +149,36 @@ class SecretBox:
 
 # --------------------------------------------------------------------- rate limit
 class SlidingWindowLimiter:
-    """进程内滑动窗口限流（单实例部署足够；多实例请换 Redis）."""
+    """进程内滑动窗口限流（单实例部署足够；多实例请换 Redis）.
 
-    def __init__(self):
-        self._events: dict[str, deque[float]] = defaultdict(deque)
+    注意：调用方可能传入攻击者可控的 key（IP、用户名），因此这里会
+    定期清理过期桶并限制 key 总数，避免内存被无限撑大。
+    """
+
+    def __init__(self, max_keys: int = 10000):
+        self._events: dict[str, deque[float]] = {}
         self._lock = threading.Lock()
+        self.max_keys = max(100, int(max_keys))
+        self._last_sweep = 0.0
+
+    def _sweep(self, now: float, window: float) -> None:
+        """清理已过期的空桶；仍超限时丢弃最旧的一批（宁可放宽限流也不能 OOM）."""
+        if now - self._last_sweep < max(1.0, window) and len(self._events) <= self.max_keys:
+            return
+        self._last_sweep = now
+        stale = [k for k, v in self._events.items() if not v or v[-1] <= now - window]
+        for key in stale:
+            self._events.pop(key, None)
+        if len(self._events) > self.max_keys:
+            overflow = len(self._events) - self.max_keys
+            for key in sorted(self._events, key=lambda k: self._events[k][-1] if self._events[k] else 0)[:overflow]:
+                self._events.pop(key, None)
 
     def allow(self, key: str, limit: int, window: float) -> tuple[bool, float]:
         now = time.monotonic()
         with self._lock:
-            bucket = self._events[key]
+            self._sweep(now, window)
+            bucket = self._events.setdefault(key, deque())
             while bucket and bucket[0] <= now - window:
                 bucket.popleft()
             if len(bucket) >= limit:
@@ -179,12 +199,27 @@ class SlidingWindowLimiter:
 class LoginThrottle:
     """登录失败锁定：同一 IP 或同一用户名连续失败后临时锁定."""
 
-    def __init__(self, max_failures: int = 5, lock_seconds: int = 900):
+    def __init__(self, max_failures: int = 5, lock_seconds: int = 900, max_keys: int = 5000):
         self.max_failures = max_failures
         self.lock_seconds = lock_seconds
-        self._failures: dict[str, deque[float]] = defaultdict(deque)
+        self.max_keys = max(100, int(max_keys))
+        self._failures: dict[str, deque[float]] = {}
         self._locked_until: dict[str, float] = {}
         self._lock = threading.Lock()
+
+    def _prune(self, now: float) -> None:
+        """清理过期记录；攻击者用随机用户名刷登录时不能把内存刷爆."""
+        expired = [k for k, until in self._locked_until.items() if until <= now]
+        for key in expired:
+            self._locked_until.pop(key, None)
+        stale = [k for k, v in self._failures.items()
+                 if not v or v[-1] <= now - self.lock_seconds]
+        for key in stale:
+            self._failures.pop(key, None)
+        if len(self._failures) > self.max_keys:
+            overflow = len(self._failures) - self.max_keys
+            for key in sorted(self._failures, key=lambda k: self._failures[k][-1])[:overflow]:
+                self._failures.pop(key, None)
 
     def is_locked(self, key: str) -> tuple[bool, float]:
         now = time.monotonic()
@@ -197,7 +232,9 @@ class LoginThrottle:
     def record_failure(self, key: str) -> None:
         now = time.monotonic()
         with self._lock:
-            bucket = self._failures[key]
+            if len(self._failures) > self.max_keys or len(self._locked_until) > self.max_keys:
+                self._prune(now)
+            bucket = self._failures.setdefault(key, deque())
             bucket.append(now)
             while bucket and bucket[0] <= now - self.lock_seconds:
                 bucket.popleft()

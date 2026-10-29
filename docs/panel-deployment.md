@@ -145,6 +145,11 @@ PANEL_AUTOSTART=1              # 1=开启自动调度（默认），0=只手动�
 PANEL_SUPERVISOR_INTERVAL=5    # 监督线程检查间隔（秒）
 PANEL_MAX_AUTO_RESTARTS=5      # 每个账号每滚动 1 小时最多自动重启次数
 PANEL_RESTART_BACKOFF=20       # 首次重启等待秒数，之后指数退避，上限 600 秒
+
+# 可选：只接受指定 Host（反代场景建议开启，抵御 Host 头伪造）
+PANEL_TRUSTED_HOSTS=panel.example.com
+# 可选：把 CSP frame-ancestors 收紧到只允许自己（默认额外允许 Arena 预览域）
+PANEL_FRAME_ANCESTORS="'self'"
 ```
 
 行为约定：
@@ -164,6 +169,7 @@ PANEL_RESTART_BACKOFF=20       # 首次重启等待秒数，之后指数退避�
 | `python panel.py --open` | 启动并自动打开浏览器（本机使用） |
 | `python panel.py --init-admin` | 首次初始化管理员（交互式） |
 | `python panel.py --reset-admin` | **忘记密码时重置管理员**（立即生效，可用 `PANEL_ADMIN_USER`/`PANEL_ADMIN_PASSWORD` 免交互） |
+| `python panel.py --doctor` | 自检：依赖、数据目录权限、端口占用（并识别端口上是本面板还是别的服务） |
 
 ### 3.4 Docker
 
@@ -303,7 +309,11 @@ curl -H "X-API-Key: $PANEL_API_KEY" https://panel.example.com/api/accounts
 | XSS | 前端全部 `textContent` 渲染；CSP 禁止内联脚本；无 `innerHTML` |
 | 点击劫持 | CSP `frame-ancestors`（默认允许 `self` 与 Arena 预览域；生产建议改为 `'self'`） |
 | 敏感日志 | Cookie/Authorization/token/通知 URL 统一脱敏；账号日志分文件 |
-| 审计 | 登录、账号操作、设置修改、启动/停止写入 `data/audit.log` |
+| 审计 | 登录、账号操作、设置修改、启动/停止写入 `data/audit.log`（5MB 自动轮转） |
+| 错误处理 | 所有错误走面板自己的页面/JSON，不回显框架默认页与堆栈；500 带错误编号便于对日志 |
+| 资源耗尽 | 登录失败记录、限流桶都有上限与过期清理，随机 key 刷接口不会撑爆内存 |
+| 数据损坏 | `accounts.json` / `settings.enc` 解析失败时先备份为 `*.corrupt-<时间戳>` 再继续，不会静默覆盖 |
+| 输入清洗 | 账号名称/备注等字段过滤控制字符，防止伪造日志行 |
 | 容器 | 非 root、`no-new-privileges`、`.dockerignore` 排除本地凭据 |
 | 无人值守 | 手动停止的账号不会被自动重启；自动重启有次数上限，防止账号密码错误时被反复锁死 |
 

@@ -148,6 +148,8 @@ python3 -m venv .venv
 | `python panel.py --open` | 启动后自动打开浏览器 |
 | `python panel.py --host 0.0.0.0` | 允许同一局域网内的手机/其他电脑访问（见第 7 节） |
 | `python panel.py --init-admin` | 在命令行里创建管理员（不想用网页初始化时） |
+| `python panel.py --reset-admin` | 忘记管理员密码时重置（立即生效） |
+| `python panel.py --doctor` | 自检：依赖、数据目录、端口是否被别的程序占用 |
 | `python panel.py --debug` | 调试模式（正式用别开） |
 
 ---
@@ -389,6 +391,38 @@ Linux:    hostname -I
 ---
 
 ## 8. 常见问题
+
+**Q0：浏览器出现 `Whitelabel Error Page` / `This application has no explicit mapping for /error`？**
+
+这**不是本面板的页面**。它是 **Spring Boot（Java）框架的默认错误页**，说明你访问的那个端口上跑着另一个 Java 程序——
+最常见的原因是：**8080 端口已经被别的软件占用**，面板其实没启动成功，浏览器连到的是别人的服务。
+
+一条命令就能确认：
+
+```bash
+python panel.py --doctor          # Windows: .venv\Scripts\python.exe panel.py --doctor
+```
+
+输出会直接告诉你：
+
+```
+❌ 端口 8080 被一个 Spring Boot（Java）应用占用！
+   你截图里的 "Whitelabel Error Page" 就是这个应用返回的，不是本面板。
+   解决办法（任选其一）：
+     1) 换一个端口启动面板：python panel.py --port 8081
+     2) 停掉占用程序后重启面板；Windows 可用:  netstat -ano | findstr :8080
+```
+
+处理办法：**换个端口启动**，例如 `run-panel.bat --port 8081` 或 `./run-panel.sh --port 8081`，
+然后访问 `http://127.0.0.1:8081`。
+
+怎么辨认自己开的是不是本面板：
+- 本面板的标题是「超星控制面板」，左上角有 `CX` 图标；
+- 访问 `http://127.0.0.1:端口/api/health` 会返回 `{"app": "chaoxing-panel", ...}`；
+- 面板启动失败时，终端会打印上面那段 ❌ 提示，不会静默退出。
+
+> 另外：如果你的面板确实启动了，但打开某个不存在的地址，现在会看到面板自己的 404 页面
+> （「页面不存在」+ 返回按钮 + 5 秒自动回首页），不会再出现框架默认的错误页。
 
 **Q1：`pip install` 很慢 / 卡住 / 超时**
 换国内镜像（清华）：

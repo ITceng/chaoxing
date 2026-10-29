@@ -10,16 +10,19 @@
 from __future__ import annotations
 
 import atexit
+import json
 import os
 import secrets
 import shutil
+import socket
 import sys
 import time
 from functools import wraps
 from pathlib import Path
 from typing import Any, Callable, Optional
 
-from flask import Flask, jsonify, request, send_from_directory, session
+from flask import Flask, Response, jsonify, redirect, request, send_from_directory, session
+from markupsafe import escape
 from werkzeug.exceptions import HTTPException
 from werkzeug.middleware.proxy_fix import ProxyFix
 
@@ -47,6 +50,58 @@ from panel_core.store import (
 APP_VERSION = "4.0.0"
 BASE_DIR = Path(__file__).resolve().parent
 STATIC_DIR = BASE_DIR / "panel_static"
+
+ERROR_PAGE_TEMPLATE = """<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="noindex, nofollow">
+{refresh}
+<title>{code} · {title}</title>
+<style>
+  :root {{ color-scheme: light dark; }}
+  * {{ box-sizing: border-box; }}
+  body {{
+    margin: 0; min-height: 100vh; display: grid; place-items: center; padding: 24px;
+    background: #f5f6f8; color: #172033;
+    font: 15px/1.6 -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC",
+          "Hiragino Sans GB", "Microsoft YaHei", sans-serif;
+  }}
+  .card {{
+    width: min(520px, 100%); background: #fff; border: 1px solid #e4e7ec;
+    border-radius: 16px; padding: 28px; box-shadow: 0 8px 30px rgba(16,24,40,.08);
+  }}
+  .code {{ font-size: 13px; font-weight: 700; letter-spacing: .12em; color: #b42318; }}
+  h1 {{ margin: 6px 0 10px; font-size: 21px; }}
+  p {{ margin: 0 0 10px; color: #475467; }}
+  .hint {{
+    margin-top: 14px; padding: 12px 14px; border-radius: 10px; font-size: 13px;
+    background: #fffaeb; border: 1px solid #fedf89; color: #93370d;
+  }}
+  .rid {{ margin-top: 14px; font-size: 12px; color: #667085; word-break: break-all; }}
+  a.btn {{
+    display: inline-block; margin-top: 18px; padding: 10px 18px; border-radius: 10px;
+    background: #175cd3; color: #fff; text-decoration: none; font-weight: 600;
+  }}
+  @media (prefers-color-scheme: dark) {{
+    body {{ background: #0f1522; color: #e6ecf5; }}
+    .card {{ background: #161d2c; border-color: #263044; }}
+    p {{ color: #a9b6c9; }}
+  }}
+</style>
+</head>
+<body>
+<main class="card">
+  <div class="code">HTTP {code}</div>
+  <h1>{title}</h1>
+  <p>{message}</p>
+  {hint}
+  {rid}
+  <a class="btn" href="/">返回控制面板</a>
+</main>
+</body>
+</html>"""
 
 PANEL_HOST = os.environ.get("PANEL_HOST", "127.0.0.1")
 PANEL_PORT = int(os.environ.get("PANEL_PORT", "8080"))
@@ -102,6 +157,12 @@ def create_app(data_dir: Optional[Path] = None, supervisor: bool = False) -> Fla
     )
     if TRUST_PROXY:
         app.wsgi_app = ProxyFix(app.wsgi_app, x_for=1, x_proto=1, x_host=1)
+    # 可选：只接受指定 Host，抵御 Host 头伪造（尤其配合反代时建议开启）
+    trusted_hosts = [
+        item.strip() for item in os.environ.get("PANEL_TRUSTED_HOSTS", "").split(",") if item.strip()
+    ]
+    if trusted_hosts:
+        app.config["TRUSTED_HOSTS"] = trusted_hosts
 
     secret_box = SecretBox(data_dir / "secret.key")
     accounts = AccountStore(secret_box, data_dir / "accounts.json")
@@ -117,6 +178,7 @@ def create_app(data_dir: Optional[Path] = None, supervisor: bool = False) -> Fla
     )
     login_ip_limiter = SlidingWindowLimiter()
     api_limiter = SlidingWindowLimiter()
+    setup_limiter = SlidingWindowLimiter()
 
     app.extensions["chaoxing_panel"] = {
         "data_dir": data_dir,
@@ -134,6 +196,29 @@ def create_app(data_dir: Optional[Path] = None, supervisor: bool = False) -> Fla
 
     def api_error(message: str, status: int = 400):
         return jsonify({"error": message}), status
+
+    def wants_json() -> bool:
+        """API 路径，或客户端明确只要 JSON 时返回 JSON；浏览器访问返回 HTML 页面."""
+        if request.path.startswith("/api/"):
+            return True
+        best = request.accept_mimetypes.best
+        if best != "application/json":
+            return False
+        return request.accept_mimetypes[best] > (request.accept_mimetypes["text/html"] or 0)
+
+    def error_page(code: int, title: str, message: str, hint: str = "",
+                   request_id: str = "", auto_back: bool = False):
+        """渲染面板自己的错误页（不依赖任何外部资源，手机也能正常显示）."""
+        html = ERROR_PAGE_TEMPLATE.format(
+            code=code,
+            title=str(escape(title)),
+            message=str(escape(message)),
+            hint=f'<div class="hint">{escape(hint)}</div>' if hint else "",
+            rid=f'<div class="rid">错误编号：{escape(request_id)}</div>' if request_id else "",
+            # 用 meta refresh 而不是内联脚本：CSP 禁止内联 JS
+            refresh='<meta http-equiv="refresh" content="5;url=/">' if auto_back else "",
+        )
+        return Response(html, status=code, mimetype="text/html")
 
     def api_key_valid() -> bool:
         if not API_KEY:
@@ -226,6 +311,17 @@ def create_app(data_dir: Optional[Path] = None, supervisor: bool = False) -> Fla
         response.headers.setdefault("X-Content-Type-Options", "nosniff")
         response.headers.setdefault("Referrer-Policy", "no-referrer")
         response.headers.setdefault("Permissions-Policy", "camera=(), microphone=(), geolocation=()")
+        response.headers.setdefault("Cross-Origin-Opener-Policy", "same-origin")
+        response.headers.setdefault("Cross-Origin-Resource-Policy", "same-origin")
+        response.headers.setdefault("X-Permitted-Cross-Domain-Policies", "none")
+        # 只在允许被同源嵌入时才加 X-Frame-Options（预览环境需要跨域 iframe）
+        if FRAME_ANCESTORS.strip() == "'self'":
+            response.headers.setdefault("X-Frame-Options", "SAMEORIGIN")
+        # 仅当本次请求确实是 HTTPS（或代理声明 HTTPS）时才发 HSTS，避免把本地 HTTP 锁死
+        if request.is_secure or COOKIE_SECURE:
+            response.headers.setdefault(
+                "Strict-Transport-Security", "max-age=31536000; includeSubDomains"
+            )
         response.headers.setdefault(
             "Content-Security-Policy",
             "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; "
@@ -237,18 +333,56 @@ def create_app(data_dir: Optional[Path] = None, supervisor: bool = False) -> Fla
             response.headers.setdefault("Pragma", "no-cache")
         return response
 
+    HTTP_MESSAGES = {
+        400: ("请求格式不正确", "提交的数据格式不对，请刷新页面后重试。"),
+        401: ("需要登录", "请先登录控制面板。"),
+        403: ("没有权限", "Origin 校验失败，或当前账号无权执行该操作。"),
+        404: ("页面不存在", "地址可能输错了，或者该功能已经改名。"),
+        405: ("请求方法不被允许", "该地址不支持当前请求方式。"),
+        413: ("请求内容过大", "上传的数据超过 2MB 限制。"),
+        429: ("请求过于频繁", "请稍等一会儿再试。"),
+        500: ("服务器内部错误", "面板处理请求时出错，详细信息已写入日志。"),
+    }
+    HTTP_HINTS = {
+        403: "如果是从其他网站跳转过来的，请直接打开面板地址重试。",
+        404: "如果你确信地址没错：请确认访问的是本面板的地址和端口——"
+             "端口被其他程序（例如 Java/Spring 应用）占用时，浏览器会显示对方的错误页。",
+        429: "频繁操作会触发保护，稍后再试即可。",
+    }
+
     @app.errorhandler(HTTPException)
     def handle_http_error(exc: HTTPException):
-        if request.path.startswith("/api/"):
-            return api_error(exc.description or exc.name, exc.code or 500)
-        return exc
+        code = exc.code or 500
+        title, message = HTTP_MESSAGES.get(code, ("请求失败", "服务器返回了错误。"))
+        if wants_json():
+            response, status = api_error(f"{title}: {message}", code)
+            return response, status
+        return error_page(
+            code, title, message,
+            hint=HTTP_HINTS.get(code, ""),
+            auto_back=(code == 404),
+        )
 
     @app.errorhandler(Exception)
     def handle_unexpected_error(exc: Exception):
-        logger.error(f"面板未处理异常: {type(exc).__name__}: {exc}")
-        if request.path.startswith("/api/"):
-            return api_error("服务器内部错误", 500)
-        return api_error("服务器内部错误", 500)
+        # 已知的 HTTP 异常交给上面的处理器，这里只兜底真正的程序错误
+        if isinstance(exc, HTTPException):
+            return handle_http_error(exc)
+        import traceback
+
+        request_id = secrets.token_hex(4)
+        logger.error(f"[{request_id}] 面板未处理异常 {type(exc).__name__}: {exc}")
+        logger.debug(traceback.format_exc())
+        if wants_json():
+            response, status = api_error("服务器内部错误，请查看面板日志", 500)
+            response.headers["X-Request-Id"] = request_id
+            return response, status
+        return error_page(
+            500, "服务器内部错误",
+            "面板处理请求时出错，详细信息已写入日志。",
+            hint="可以重试一次；如果持续出现，请查看 data/ 或终端里的日志，并带上错误编号反馈。",
+            request_id=request_id,
+        )
 
     # ------------------------------------------------------------------- static
     @app.get("/")
@@ -259,15 +393,35 @@ def create_app(data_dir: Optional[Path] = None, supervisor: bool = False) -> Fla
     def favicon():
         return ("", 204)
 
+    @app.get("/robots.txt")
+    def robots():
+        return Response("User-agent: *\nDisallow: /\n", mimetype="text/plain")
+
+    @app.get("/error")
+    def error_entry():
+        """有些反向代理/网关会把错误重写到 /error，这里统一回面板首页."""
+        return redirect("/", code=302)
+
     # ------------------------------------------------------------------- health
-    @app.get("/api/health")
-    def health():
+    def health_payload():
         return jsonify({
             "ok": True,
+            "app": "chaoxing-panel",
             "version": APP_VERSION,
             "time": int(time.time()),
             "authenticated_required": True,
         })
+
+    @app.get("/api/health")
+    def health():
+        return health_payload()
+
+    # 常见探针路径（Docker/K8s/Nginx 默认会打这些），行为与 /api/health 一致
+    @app.get("/healthz")
+    @app.get("/livez")
+    @app.get("/readyz")
+    def health_alias():
+        return health_payload()
 
     @app.get("/api/auth/status")
     def auth_status():
@@ -297,6 +451,12 @@ def create_app(data_dir: Optional[Path] = None, supervisor: bool = False) -> Fla
             return api_error("Origin 不被允许", 403)
         if auth.configured:
             return api_error("面板已初始化", 409)
+        # 初始化接口必须限流：否则公网上可以被用来反复试探 PANEL_SETUP_TOKEN
+        allowed, retry_after = setup_limiter.allow(f"setup:{client_ip()}", 10, 900)
+        if not allowed:
+            response = api_error("初始化尝试过于频繁，请稍后再试", 429)
+            response[0].headers["Retry-After"] = str(max(1, int(retry_after)))
+            return response
         setup_token = os.environ.get("PANEL_SETUP_TOKEN", "").strip()
         if setup_token and not constant_time_equal(request.headers.get("X-Setup-Token", ""), setup_token):
             return api_error("初始化令牌不正确", 403)
@@ -433,10 +593,20 @@ def create_app(data_dir: Optional[Path] = None, supervisor: bool = False) -> Fla
                 return "请填写账号密码，或提供 Cookie 并启用 Cookie 登录"
         return None
 
+    def _strip_control(text: str) -> str:
+        """去掉控制字符（换行/回车等），避免把日志或审计记录"劈开"伪造条目."""
+        cleaned = "".join(
+            ch for ch in str(text) if ch in ("\t",) or ord(ch) >= 32 and ord(ch) != 127
+        )
+        return cleaned
+
     def _account_payload() -> dict[str, Any]:
         data = request.get_json(silent=True) or {}
         if not isinstance(data, dict):
             return {}
+        for key in ("name", "notes", "course_list", "username"):
+            if isinstance(data.get(key), str):
+                data[key] = _strip_control(data[key]).strip() if key != "notes" else _strip_control(data[key])
         return data
 
     @app.get("/api/accounts")
@@ -753,6 +923,176 @@ def reset_admin_command(app: Flask, port: int = PANEL_PORT) -> int:
     return 0
 
 
+def _http_get(url: str, timeout: float = 2.0) -> tuple[int, str]:
+    """极简 HTTP GET（只用标准库），失败返回 (0, 错误信息)."""
+    import urllib.error
+    import urllib.request
+
+    try:
+        with urllib.request.urlopen(url, timeout=timeout) as resp:
+            return resp.status, resp.read(64 * 1024).decode("utf-8", "replace")
+    except urllib.error.HTTPError as exc:
+        try:
+            body = exc.read(16 * 1024).decode("utf-8", "replace")
+        except Exception:  # noqa: BLE001
+            body = ""
+        return exc.code, body
+    except Exception as exc:  # noqa: BLE001
+        return 0, f"{type(exc).__name__}: {exc}"
+
+
+def _port_free(host: str, port: int) -> bool:
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
+        sock.settimeout(0.6)
+        return sock.connect_ex((host if host not in ("0.0.0.0", "::") else "127.0.0.1", port)) != 0
+
+
+def _explain_bind_failure(port: int, host: str = "127.0.0.1") -> int:
+    """端口被占用时给出可操作的中文提示（很多"打不开/显示别的页面"都是这个原因）."""
+    print()
+    print(f"❌ 无法在 {host}:{port} 启动：端口可能已被其他程序占用。")
+    status, body = _http_get(f"http://127.0.0.1:{port}/api/health")
+    running_panel = False
+    if status == 200:
+        try:
+            parsed = json.loads(body)
+        except json.JSONDecodeError:
+            parsed = None
+        running_panel = isinstance(parsed, dict) and parsed.get("app") == "chaoxing-panel"
+    if running_panel:
+        print(f"   这个端口上已经有一个本面板在运行了（http://127.0.0.1:{port}）。")
+        print("   直接打开它即可；如果想同时开第二个，请用 --port 换一个端口。")
+        return 1
+    status, body = _http_get(f"http://127.0.0.1:{port}/")
+    if "Whitelabel Error Page" in body or "no explicit mapping for /error" in body:
+        print("   该端口上跑着一个 Spring Boot（Java）应用 ——")
+        print("   浏览器里看到的 \"Whitelabel Error Page\" 是它返回的，不是本面板。")
+    elif status:
+        print(f"   该端口上已有其他服务在响应（HTTP {status}），不是本面板。")
+    print()
+    print(f"   解决办法一：换个端口   python panel.py --port {port + 1}")
+    print("   解决办法二：停掉占用程序，然后重新启动面板")
+    print(f"      Windows : netstat -ano | findstr :{port}  (再用 taskkill /PID <pid> /F)")
+    print(f"      macOS   : lsof -i :{port}")
+    print(f"      Linux   : ss -lptn 'sport = :{port}'")
+    print("   更多自检：python panel.py --doctor")
+    return 1
+
+
+def run_doctor(app: Flask, port: int = PANEL_PORT) -> int:
+    """`--doctor`：自检并判断"我访问的到底是不是本面板"."""
+    ok_all = True
+    print("=" * 56)
+    print("  超星控制面板 · 自检")
+    print("=" * 56)
+
+    def line(status: str, text: str) -> None:
+        print(f"{status} {text}")
+
+    # 1. Python / 依赖
+    version = ".".join(str(v) for v in sys.version_info[:3])
+    if sys.version_info >= (3, 10):
+        line("✅", f"Python {version}")
+    else:
+        ok_all = False
+        line("❌", f"Python {version} 版本过低，需要 3.10 及以上")
+
+    missing = []
+    for module, package in (("flask", "flask"), ("cryptography", "cryptography")):
+        try:
+            __import__(module)
+        except Exception:  # noqa: BLE001
+            missing.append(package)
+    if missing:
+        ok_all = False
+        line("❌", f"缺少依赖: {', '.join(missing)} → pip install -r requirements-panel.txt")
+    else:
+        line("✅", "核心依赖完整（flask / cryptography）")
+    for module in ("ddddocr", "fontTools", "httpx", "tenacity"):
+        try:
+            __import__(module)
+        except Exception:  # noqa: BLE001
+            line("⚠️ ", f"可选依赖缺失: {module}（验证码/字体解密会受影响）")
+            break
+    else:
+        line("✅", "可选依赖完整（ddddocr / fontTools / httpx / tenacity）")
+
+    # 2. 数据目录
+    info = app.extensions["chaoxing_panel"]
+    data_dir = Path(info["data_dir"])
+    try:
+        data_dir.mkdir(parents=True, exist_ok=True)
+        probe = data_dir / ".doctor-write-test"
+        probe.write_text("ok", encoding="utf-8")
+        probe.unlink()
+        line("✅", f"数据目录可写: {data_dir}")
+    except OSError as exc:
+        ok_all = False
+        line("❌", f"数据目录不可写: {data_dir} ({exc})")
+
+    key_file = Path(info["secret_box"].key_path)
+    if key_file.exists():
+        mode = oct(key_file.stat().st_mode & 0o777)
+        note = "" if mode in ("0o600", "0o400") else "（建议 chmod 600，当前权限过宽）"
+        line("✅" if not note else "⚠️ ", f"加密密钥: {key_file} 权限 {mode}{note}")
+    elif os.environ.get("PANEL_SECRET_KEY"):
+        line("✅", "加密密钥来自环境变量 PANEL_SECRET_KEY")
+    else:
+        line("⚠️ ", f"加密密钥尚未生成（首次保存账号时会自动创建于 {key_file}）")
+
+    auth = info["auth"]
+    if auth.configured:
+        line("✅", f"管理员已初始化: {auth.username}")
+    else:
+        ok_all = False
+        line("❌", "管理员尚未初始化：启动面板后打开网页初始化，或执行 python panel.py --init-admin")
+
+    try:
+        count = len(info["accounts"].list_public())
+        line("✅" if count else "⚠️ ", f"已保存账号数: {count}")
+    except Exception as exc:  # noqa: BLE001
+        line("⚠️ ", f"读取账号失败: {exc}")
+
+    # 3. 端口 / 对面到底是什么服务（重点）
+    print("-" * 56)
+    if _port_free("127.0.0.1", port):
+        line("✅", f"端口 {port} 空闲：可以直接启动面板")
+    else:
+        status, body = _http_get(f"http://127.0.0.1:{port}/api/health")
+        parsed = None
+        if status == 200:
+            try:
+                parsed = json.loads(body)
+            except json.JSONDecodeError:
+                parsed = None
+        if isinstance(parsed, dict) and parsed.get("app") == "chaoxing-panel":
+            line("✅", f"端口 {port} 上运行的是本面板 v{parsed.get('version', '?')}（已在运行）")
+        elif isinstance(parsed, dict) and parsed.get("ok"):
+            line("⚠️ ", f"端口 {port} 上是一个返回 JSON 的服务，但不像本面板")
+            ok_all = False
+        else:
+            ok_all = False
+            page_status, page_body = _http_get(f"http://127.0.0.1:{port}/")
+            if "Whitelabel Error Page" in page_body or "no explicit mapping for /error" in page_body:
+                line("❌", f"端口 {port} 被一个 Spring Boot（Java）应用占用！")
+                print()
+                print("   你截图里的 \"Whitelabel Error Page\" 就是这个应用返回的，不是本面板。")
+                print("   解决办法（任选其一）：")
+                print(f"     1) 换一个端口启动面板：python panel.py --port {port + 1}")
+                print("     2) 停掉占用程序后重启面板；Windows 可用:  netstat -ano | findstr :%d" % port)
+                print("        Linux/macOS 可用:  lsof -i :%d" % port)
+            else:
+                line("❌", f"端口 {port} 被其他程序占用（返回 HTTP {page_status}），不是本面板")
+                print()
+                print("   浏览器访问该端口会显示对方的页面/错误页。请换端口启动：")
+                print(f"     python panel.py --port {port + 1}")
+                print("   或先停掉占用程序（Windows: netstat -ano | findstr :%d）" % port)
+
+    print("-" * 56)
+    print("结论：" + ("一切正常，可以启动 `python panel.py`" if ok_all else "有问题需要处理，见上面的 ❌ 项"))
+    return 0 if ok_all else 1
+
+
 def main() -> int:
     import argparse
 
@@ -764,7 +1104,12 @@ def main() -> int:
                         help="重置管理员密码（忘记密码时用；可用 PANEL_ADMIN_USER/PANEL_ADMIN_PASSWORD 免交互）")
     parser.add_argument("--debug", action="store_true", help="Flask debug 模式")
     parser.add_argument("--open", action="store_true", help="启动后自动用浏览器打开面板")
+    parser.add_argument("--doctor", action="store_true",
+                        help="自检：依赖、数据目录、端口占用（看不清访问的是不是本面板时用）")
     args = parser.parse_args()
+
+    if args.doctor:
+        return run_doctor(app, port=args.port)
 
     if args.init_admin:
         import getpass
@@ -803,8 +1148,28 @@ def main() -> int:
 
         host = "127.0.0.1" if args.host in ("0.0.0.0", "::") else args.host
         threading.Timer(1.5, lambda: webbrowser.open(f"http://{host}:{args.port}")).start()
-    app.run(host=args.host, port=args.port, debug=args.debug or PANEL_DEBUG,
-            threaded=True, use_reloader=False)
+
+    debug = args.debug or PANEL_DEBUG
+    serve = None
+    if not debug:
+        try:
+            from waitress import serve as _waitress_serve  # 跨平台（含 Windows）的 WSGI 服务器
+
+            serve = _waitress_serve
+        except ImportError:
+            serve = None
+
+    try:
+        if serve is not None:
+            serve(app, host=args.host, port=args.port, threads=8, ident="chaoxing-panel")
+        else:
+            app.run(host=args.host, port=args.port, debug=debug,
+                    threaded=True, use_reloader=False)
+    except OSError as exc:
+        logger.error(f"启动失败: {exc}")
+        return _explain_bind_failure(args.port, args.host)
+    except SystemExit as exc:              # app.run 退出
+        return int(exc.code or 0)
     return 0
 
 

@@ -125,6 +125,22 @@ def _read_json(path: Path, default):
         return default
 
 
+def _backup_corrupt(path: Path) -> Optional[Path]:
+    """文件损坏时先备份，避免下一次写入把用户数据彻底覆盖掉."""
+    try:
+        if not path.exists() or path.stat().st_size == 0:
+            return None
+        target = path.with_name(f"{path.name}.corrupt-{int(time.time())}")
+        path.replace(target)
+        try:
+            os.chmod(target, 0o600)
+        except OSError:
+            pass
+        return target
+    except OSError:
+        return None
+
+
 class AccountStore:
     def __init__(self, secret_box: SecretBox, path: Path = ACCOUNTS_FILE):
         self.secret_box = secret_box
@@ -144,9 +160,34 @@ class AccountStore:
                 _atomic_write(self.path, json.dumps({"accounts": []}, ensure_ascii=False, indent=2))
 
     def _load(self) -> list[dict[str, Any]]:
-        data = _read_json(self.path, {"accounts": []})
+        with self._lock:
+            data = self._read_accounts()
         accounts = data.get("accounts") if isinstance(data, dict) else []
         return accounts if isinstance(accounts, list) else []
+
+    def _read_accounts(self) -> dict[str, Any]:
+        """读取 accounts.json；文件损坏时先备份再返回空列表，避免数据被覆盖丢失."""
+        if not self.path.exists():
+            return {"accounts": []}
+        try:
+            raw = self.path.read_text(encoding="utf-8")
+        except OSError:
+            return {"accounts": []}
+        if not raw.strip():
+            return {"accounts": []}
+        try:
+            data = json.loads(raw)
+        except json.JSONDecodeError:
+            backup = _backup_corrupt(self.path)
+            if backup is not None:
+                from api.logger import logger
+
+                logger.error(
+                    f"accounts.json 无法解析，已原样备份为 {backup.name}；"
+                    "如需恢复请修复该文件后重命名为 accounts.json"
+                )
+            return {"accounts": []}
+        return data if isinstance(data, dict) else {"accounts": []}
 
     def _save(self, accounts: list[dict[str, Any]]) -> None:
         _atomic_write(self.path, json.dumps({"accounts": accounts}, ensure_ascii=False, indent=2))
@@ -320,7 +361,17 @@ class SettingsStore:
         try:
             raw = self.secret_box.decrypt(self.path.read_text(encoding="utf-8"))
             data = json.loads(raw)
-        except (OSError, SecurityError, json.JSONDecodeError):
+        except (OSError, SecurityError, json.JSONDecodeError) as exc:
+            # 解密/解析失败（密钥被换、文件损坏）时先备份原文件，
+            # 否则下一次保存会用默认值覆盖掉题库 token 等配置。
+            backup = _backup_corrupt(self.path)
+            from api.logger import logger
+
+            if backup is not None:
+                logger.error(
+                    f"settings.enc 无法解密（{type(exc).__name__}），已备份为 {backup.name}；"
+                    "面板将使用默认设置，恢复时可用原密钥解密该备份"
+                )
             data = {}
         merged = json.loads(json.dumps(DEFAULT_SETTINGS))
         _deep_merge(merged, data if isinstance(data, dict) else {})
