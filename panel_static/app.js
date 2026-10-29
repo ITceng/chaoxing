@@ -167,6 +167,14 @@
     return (seconds / 3600).toFixed(1) + " 小时";
   }
 
+  function platformName(key) {
+    if (!key) return "";
+    const list = (state.meta && state.meta.platforms) || [];
+    const found = list.find((item) => item.key === key);
+    if (found) return found.name;
+    return key === "chaoxing" ? "超星" : key;
+  }
+
   function restartLine(account) {
     const runtime = account.runtime || {};
     if (runtime.restart_blocked) {
@@ -196,7 +204,8 @@
       h("div", {},
         h("div", { class: "card-title", text: account.name || account.username_hint || account.id }),
         h("div", { class: "card-sub",
-          text: [account.username_hint, account.use_cookies ? "Cookie 登录" : "账号密码登录",
+          text: [platformName(account.platform), account.username_hint,
+            account.use_cookies ? "Cookie 登录" : "账号密码登录",
             account.autostart ? "无人值守" : "手动启动"]
             .filter(Boolean).join(" · ") || account.id }),
       ),
@@ -437,12 +446,32 @@
     (state.meta.providers || []).forEach((item) => provider.appendChild(option(item, item)));
     if (account) provider.value = account.provider || "";
     const notes = h("textarea", { name: "notes", maxlength: "1000", value: account ? account.notes : "" });
+    const platform = h("select", { name: "platform" });
+    const platforms = (state.meta && state.meta.platforms) || [];
+    platforms.forEach((item) => {
+      platform.appendChild(option(item.key, item.name + (item.status === "demo" ? "" : "")));
+    });
+    if (!platforms.length) platform.appendChild(option("chaoxing", "超星学习通 / 泛雅"));
+    const currentPlatform = account ? (account.platform || "chaoxing") : (state.meta && state.meta.default_platform) || "chaoxing";
+    platform.value = currentPlatform;
+    if (!platform.value) platform.selectedIndex = 0;
+    const platformHint = h("p", { class: "hint", text: "" });
+    const refreshPlatformHint = () => {
+      const picked = platforms.find((item) => item.key === platform.value);
+      platformHint.textContent = picked ? (picked.summary || "") + (picked.docs ? " · " + picked.docs : "") : "";
+    };
+    platform.addEventListener("change", refreshPlatformHint);
+    refreshPlatformHint();
     const autostart = h("input", { type: "checkbox", name: "autostart",
       checked: account ? account.autostart !== false : true });
     const autoRestart = h("input", { type: "checkbox", name: "auto_restart",
       checked: account ? account.auto_restart !== false : true });
 
     const form = h("form", { class: "form" },
+      h("div", { class: "section-title", text: "平台" }),
+      field("网课平台", platform),
+      platformHint,
+
       h("div", { class: "section-title", text: "登录凭据" }),
       h("div", { class: "grid2" },
         field("账号名称", name),
@@ -503,6 +532,7 @@
         add_learning_count: addCount.checked,
         target_count: Number(target.value),
         provider: provider.value,
+        platform: platform.value,
         notes: notes.value,
         autostart: autostart.checked,
         auto_restart: autoRestart.checked,

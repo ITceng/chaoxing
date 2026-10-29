@@ -57,8 +57,8 @@ class AutostartTest(unittest.TestCase):
         self.manager.restart_backoff = 0.0
         self.manager.max_auto_restarts = 3
         self._patchers = [
-            mock.patch.object(runner_module, "init_chaoxing",
-                              side_effect=lambda conf, tiku, config_path=None: FakeChaoxing(conf)),
+            mock.patch.object(runner_module, "build_adapter",
+                              side_effect=lambda key, conf, tiku=None: FakeChaoxing(conf)),
             mock.patch.object(runner_module, "build_tiku_config", return_value={}),
         ]
         for patcher in self._patchers:

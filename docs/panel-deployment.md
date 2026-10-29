@@ -202,6 +202,7 @@ docker compose -f docker-compose.panel.yml logs -f panel
 | 章节调度 | 默认 `course_serial=true`：课程内章节串行、课程之间并行；`jobs` 只控制同一账号内的章节并发 |
 | 全局并发 | `max_concurrent_accounts`（默认 2）：超出时排队，不影响已运行账号 |
 | 无人值守 | 每个账号 `autostart` / `auto_restart` 开关；手动停止的账号不会被自动重启 |
+| 平台 | 每个账号独立选择平台（`platform` 字段）；未实现的平台在面板中不可选 |
 
 行为示例：
 
@@ -261,7 +262,7 @@ curl -H "X-API-Key: $PANEL_API_KEY" https://panel.example.com/api/accounts
 | 方法 | 路径 | 说明 |
 |---|---|---|
 | GET | `/api/health` | 健康检查（无需鉴权，泄露信息极少） |
-| GET | `/api/meta` | 版本、题库列表、`supervisor` 是否在运行（需登录） |
+| GET | `/api/meta` | 版本、题库列表、可选平台列表、`supervisor` 是否在运行（需登录） |
 | GET | `/api/auth/status` | 是否已初始化/已登录 |
 | POST | `/api/auth/setup` | 首次初始化管理员；可用 `PANEL_SETUP_TOKEN` 保护 |
 | POST | `/api/auth/login` | 登录（限流 + 失败锁定） |

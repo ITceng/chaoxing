@@ -97,6 +97,12 @@ def parse_args():
         "--retry-interval", type=float, default=None, help="重试等待时间, 单位秒 (默认1.0)"
     )
     parser.add_argument(
+        "--platform",
+        type=str,
+        default=None,
+        help="网课平台（默认 chaoxing；可选: chaoxing / demo）",
+    )
+    parser.add_argument(
         "--course-serial",
         dest="course_serial",
         action="store_true",
@@ -254,6 +260,11 @@ def init_config():
             common_config["use_cookies"] = True
     else:
         common_config, tiku_config, notification_config = build_config_from_args(args)
+
+    # 平台：命令行优先级最高（默认超星）
+    if getattr(args, "platform", None):
+        common_config["platform"] = args.platform
+    common_config.setdefault("platform", "chaoxing")
     return common_config, tiku_config, notification_config, args.config
 
 
@@ -801,6 +812,8 @@ def build_chapter_tasks(chaoxing: Chaoxing, course_task: list[dict], course_seri
 
 def main():
     """主程序入口（CLI 单账号）."""
+    from platforms import PlatformError, build_adapter, default_platform, get_platform
+
     notification = None
     control = RunControl()
     try:
@@ -819,8 +832,15 @@ def main():
         # 绑定 Cookie 文件（多账号/面板时由上层指定）
         SessionManager.bind(cookies_path=common_config.get("cookies_path"))
 
-        # 初始化超星实例
-        chaoxing = init_chaoxing(common_config, tiku_config, config_path=config_path)
+        # 初始化平台适配器（默认超星，可通过 --platform / 配置项切换）
+        platform_key = common_config.get("platform") or default_platform()
+        try:
+            _spec = get_platform(platform_key)
+        except PlatformError as e:
+            logger.error(str(e))
+            return 2
+        logger.info(f"使用平台: {_spec.name}（{_spec.key}）")
+        chaoxing = build_adapter(platform_key, common_config, tiku_config)
 
         # 设置外部通知
         notification = Notification()

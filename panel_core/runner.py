@@ -22,8 +22,8 @@ from main import (
     JobProcessor,
     build_chapter_tasks,
     filter_courses,
-    init_chaoxing,
 )
+from platforms import PlatformError, build_adapter, default_platform, get_platform
 from panel_core.store import AccountStore, SettingsStore
 
 
@@ -196,12 +196,17 @@ class AccountRunner:
             }
 
             self._set_phase("login")
-            logger.info(f"开始登录账号 {name} ...")
-            chaoxing = init_chaoxing(
-                common_config,
-                build_tiku_config(settings, account.get("provider", "")),
-                config_path=None,
-            )
+            platform_key = str(account.get("platform") or default_platform())
+            platform_name = get_platform(platform_key).name
+            logger.info(f"开始登录账号 {name}（平台: {platform_name}）...")
+            try:
+                chaoxing = build_adapter(
+                    platform_key,
+                    common_config,
+                    build_tiku_config(settings, account.get("provider", "")),
+                )
+            except PlatformError as e:
+                raise RuntimeError(str(e)) from e
             login_state = chaoxing.login(login_with_cookies=common_config["use_cookies"])
             if not login_state.get("status"):
                 raise RuntimeError(f"登录失败: {login_state.get('msg')}")

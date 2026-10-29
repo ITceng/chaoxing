@@ -76,8 +76,8 @@ class RunnerIsolationTest(unittest.TestCase):
         self.settings.update({"max_concurrent_accounts": 3})
         self.manager = RunnerManager(self.accounts, self.settings)
         self._patchers = [
-            mock.patch.object(runner_module, "init_chaoxing",
-                              side_effect=lambda conf, tiku, config_path=None: FakeChaoxing(conf)),
+            mock.patch.object(runner_module, "build_adapter",
+                              side_effect=lambda key, conf, tiku=None: FakeChaoxing(conf)),
             mock.patch.object(runner_module, "build_tiku_config", return_value={}),
         ]
         for patcher in self._patchers:

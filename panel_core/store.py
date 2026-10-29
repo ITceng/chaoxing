@@ -88,6 +88,7 @@ DEFAULT_ACCOUNT: dict[str, Any] = {
     "add_learning_count": False,
     "target_count": 100,
     "provider": "",
+    "platform": "chaoxing",
     "notes": "",
     # 无人值守：面板/服务器启动后自动开始；运行失败后自动重启（有上限）
     "autostart": True,
@@ -261,7 +262,7 @@ class AccountStore:
             "name", "use_cookies", "course_list", "speed", "jobs", "notopen_action",
             "course_serial", "work_redo_enabled", "work_max_retries",
             "add_learning_count", "target_count", "provider", "notes",
-            "autostart", "auto_restart",
+            "autostart", "auto_restart", "platform",
         ]:
             if key in payload and payload[key] is not None:
                 record[key] = payload[key]
@@ -331,6 +332,7 @@ def public_account(record: dict[str, Any], accounts_dir: Path = ACCOUNTS_DIR) ->
         "add_learning_count": bool(record.get("add_learning_count", False)),
         "target_count": record.get("target_count", 100),
         "provider": record.get("provider", ""),
+        "platform": record.get("platform") or "chaoxing",
         "notes": record.get("notes", ""),
         "autostart": bool(record.get("autostart", True)),
         "auto_restart": bool(record.get("auto_restart", True)),

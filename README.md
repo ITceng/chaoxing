@@ -110,6 +110,7 @@ PANEL_DATA_DIR=./data PANEL_HOST=127.0.0.1 PANEL_PORT=8080 python panel.py
 
 - 账号独立运行：每个账号独立线程 / 会话 / Cookie / 日志，单账号停止或暂停不影响其他账号；
 - 实时进度、当前章节、增量日志，支持启动全部 / 暂停全部 / 停止全部；
+- 多平台：账号可分别选择平台（内置超星、演示平台；智慧树骨架已就位），调度器与平台解耦；
 - 无人值守：服务器重启后自动开始账号，失败自动重启（有上限），手动停止的账号不会被复活；
 - 手机浏览器远程管理：单个账号暂停/停止/继续即时生效，界面已适配手机；
 - 账号密码、Cookie、题库 token 加密落盘，日志自动脱敏；
@@ -123,7 +124,8 @@ PANEL_DATA_DIR=./data PANEL_HOST=127.0.0.1 PANEL_PORT=8080 python panel.py
 打不开面板 / 看到 `Whitelabel Error Page`：执行 `python panel.py --doctor` 自检（多半是端口被别的程序占用）。
 
 完整部署与安全说明见 [`docs/panel-deployment.md`](docs/panel-deployment.md)，
-手机远程管理与无人值守说明见 [`docs/mobile-control.md`](docs/mobile-control.md)。
+手机远程管理与无人值守说明见 [`docs/mobile-control.md`](docs/mobile-control.md)；
+接入智慧树等其他平台见 [`docs/adding-a-platform.md`](docs/adding-a-platform.md)。
 
 > 生产环境请务必放在 HTTPS 反向代理之后，设置 `PANEL_COOKIE_SECURE=1`，并**只使用单 worker**（`gunicorn -w 1`），因为账号运行状态保存在进程内存中。
 

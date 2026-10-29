@@ -46,6 +46,13 @@ from panel_core.store import (
     SettingsStore,
     _atomic_write,
 )
+from platforms import (
+    PlatformError,
+    default_platform,
+    get_platform,
+    list_platforms,
+    platform_keys,
+)
 
 APP_VERSION = "4.0.0"
 BASE_DIR = Path(__file__).resolve().parent
@@ -442,6 +449,8 @@ def create_app(data_dir: Optional[Path] = None, supervisor: bool = False) -> Fla
             "max_concurrent_accounts": settings.get().get("max_concurrent_accounts", 2),
             "supervisor": manager.supervisor_running,
             "max_auto_restarts": manager.max_auto_restarts,
+            "platforms": list_platforms(),
+            "default_platform": default_platform(),
         })
 
     # --------------------------------------------------------------------- auth
@@ -559,6 +568,15 @@ def create_app(data_dir: Optional[Path] = None, supervisor: bool = False) -> Fla
 
     # ----------------------------------------------------------------- accounts
     def _validate_account_payload(data: dict[str, Any], creating: bool) -> Optional[str]:
+        if "platform" in data:
+            key = str(data.get("platform") or "").strip() or default_platform()
+            try:
+                spec = get_platform(key)
+            except PlatformError:
+                return f"未知平台，可选: {', '.join(platform_keys())}"
+            if not spec.available:
+                return f"平台「{spec.name}」尚未实现，暂不可选"
+            data["platform"] = key
         if "name" in data and len(str(data["name"])) > 64:
             return "账号名称过长"
         if "username" in data and len(str(data["username"])) > 64:
@@ -636,6 +654,7 @@ def create_app(data_dir: Optional[Path] = None, supervisor: bool = False) -> Fla
             data["name"] = str(data.get("username", ""))[:64] or "未命名账号"
         if data.get("cookies_text"):
             data["use_cookies"] = True
+        data.setdefault("platform", default_platform())
         account = accounts.create(data)
         audit_write("account.create", account["id"], detail={"name": account["name"]})
         return jsonify({"account": account}), 201
