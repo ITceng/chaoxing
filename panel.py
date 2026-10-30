@@ -3,7 +3,7 @@
 """超星多账号控制面板.
 
 启动:
-    PANEL_HOST=0.0.0.0 PANEL_PORT=8080 python panel.py
+    PANEL_HOST=0.0.0.0 PANEL_PORT=101010 python panel.py
 
 生产部署请放在 HTTPS 反向代理之后，并设置 PANEL_COOKIE_SECURE=1。
 """
@@ -115,7 +115,7 @@ ERROR_PAGE_TEMPLATE = """<!doctype html>
 </html>"""
 
 PANEL_HOST = os.environ.get("PANEL_HOST", "127.0.0.1")
-PANEL_PORT = int(os.environ.get("PANEL_PORT", "8080"))
+PANEL_PORT = int(os.environ.get("PANEL_PORT", "101010"))
 PANEL_DEBUG = os.environ.get("PANEL_DEBUG", "0") == "1"
 TRUST_PROXY = os.environ.get("PANEL_TRUST_PROXY", "0") == "1"
 COOKIE_SECURE = os.environ.get("PANEL_COOKIE_SECURE", "0") == "1"
@@ -1286,7 +1286,7 @@ def main() -> int:
 
     parser = argparse.ArgumentParser(description="超星多账号控制面板")
     parser.add_argument("--host", default=PANEL_HOST, help="监听地址（默认 127.0.0.1）")
-    parser.add_argument("--port", type=int, default=PANEL_PORT, help="监听端口（默认 8080）")
+    parser.add_argument("--port", type=int, default=PANEL_PORT, help="监听端口（默认 101010）")
     parser.add_argument("--init-admin", action="store_true", help="交互式初始化管理员账号")
     parser.add_argument("--reset-admin", action="store_true",
                         help="重置管理员密码（忘记密码时用；可用 PANEL_ADMIN_USER/PANEL_ADMIN_PASSWORD 免交互）")

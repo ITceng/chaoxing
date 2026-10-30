@@ -55,7 +55,7 @@ if not exist ".venv\Scripts\python.exe" (
 
 rem ---------- 3. 启动 ----------
 echo.
-echo 面板地址： http://127.0.0.1:8080  （如需换端口：run-panel.bat --port 8081）
+echo 面板地址： http://127.0.0.1:101010  （如需换端口：run-panel.bat --port 8081）
 echo 首次打开需要创建管理员账号（密码至少 10 位）。
 echo 关闭本窗口或按 Ctrl+C 即可停止面板。
 echo 忘记密码：在本窗口按 Ctrl+C 停止后，执行   run-panel.bat --reset-admin
