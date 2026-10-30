@@ -6,7 +6,7 @@ services:
     image: chaoxing-panel:latest
     restart: unless-stopped
     ports:
-      - "127.0.0.1:101010:101010"
+      - "127.0.0.1:1014:1014"
     environment:
       PANEL_DATA_DIR: /data
       # 生产环境必须改成 1，并通过 HTTPS 访问

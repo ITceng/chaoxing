@@ -39,7 +39,7 @@ else
   PY_RUN=".venv/bin/python"
 fi
 
-SHOW_PORT=101010
+SHOW_PORT=1014
 SHOW_HOST=127.0.0.1
 prev=""
 for arg in "$@"; do
