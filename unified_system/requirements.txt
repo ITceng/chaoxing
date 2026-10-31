@@ -4,4 +4,4 @@ psycopg[binary]>=3.2,<4
 alembic>=1.14,<2
 argon2-cffi>=23.1,<26
 cryptography>=43,<47
-gunicorn>=22,<24
+gunicorn>=22,<24; platform_system != "Windows"
