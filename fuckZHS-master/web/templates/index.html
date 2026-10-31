@@ -1,0 +1,209 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>ZHS Fucker 面板</title>
+  <link rel="stylesheet" href="/static/style.css">
+  <!-- 智慧树官方使用的网易易盾验证码封装 -->
+  <script src="https://base2.zhihuishu.com/ableCaptcha/assets/ableCaptchaPCv2Common.js"></script>
+</head>
+<body>
+  <header class="topbar">
+    <div class="brand">
+      <span class="brand-mark">Z</span>
+      <div>
+        <h1>ZHS Fucker</h1>
+        <p>智慧树课程管理面板</p>
+      </div>
+    </div>
+    <div class="topbar-right">
+      <span id="login-badge" class="badge badge-off">未登录</span>
+      <button id="logout-btn" class="btn btn-ghost" hidden>退出登录</button>
+    </div>
+  </header>
+
+  <main class="page">
+    <!-- 登录页 -->
+    <section id="login-view" class="login-layout">
+      <div class="hero">
+        <p class="eyebrow">ZHS / ACCESS</p>
+        <h2>登录</h2>
+        <p class="hero-text">
+          账号密码需要完成智慧树官方的滑动验证；扫码或导入 Cookie 可直接进入控制台。
+        </p>
+        <ul class="feature-list">
+          <li>支持知到共享课与校内学分课</li>
+          <li>课程列表与批量任务</li>
+          <li>任务日志实时输出</li>
+        </ul>
+      </div>
+
+      <div class="card login-card">
+        <div class="tabs" role="tablist">
+          <button class="tab active" data-tab="password" role="tab">账号密码</button>
+          <button class="tab" data-tab="qrcode" role="tab">扫码登录</button>
+          <button class="tab" data-tab="cookie" role="tab">Cookie 导入</button>
+        </div>
+
+        <div id="tab-password" class="tab-panel active">
+          <form id="password-form" autocomplete="on">
+            <label class="field">
+              <span>账号</span>
+              <input id="account" name="account" type="text" placeholder="手机号 / 账号 / 邮箱" autocomplete="username" required>
+            </label>
+            <label class="field">
+              <span>密码</span>
+              <input id="password" name="password" type="password" placeholder="智慧树密码" autocomplete="current-password" required>
+            </label>
+            <button id="password-submit" class="btn btn-primary btn-block" type="submit">
+              登录（含滑动验证）
+            </button>
+            <button id="password-direct" class="link-btn" type="button">
+              验证码加载失败？直接尝试登录
+            </button>
+          </form>
+          <p class="hint">
+            密码只用于本次登录请求，不会写入 config.json。
+          </p>
+          <p id="captcha-hint" class="hint" data-ready="0">验证码组件加载中...</p>
+        </div>
+
+        <div id="tab-qrcode" class="tab-panel">
+          <div class="qr-wrap">
+            <div id="qr-box" class="qr-box empty">
+              <span id="qr-placeholder">点击下方按钮获取二维码</span>
+              <img id="qr-img" alt="登录二维码" hidden>
+            </div>
+            <button id="qr-start" class="btn btn-primary btn-block" type="button">获取二维码</button>
+            <p id="qr-status" class="qr-status">等待获取</p>
+            <p class="hint">使用智慧树 App 扫描二维码，并在手机上确认登录。</p>
+          </div>
+        </div>
+
+        <div id="tab-cookie" class="tab-panel">
+          <label class="field">
+            <span>Cookie / cookies.json</span>
+            <textarea id="cookie-input" rows="8" placeholder='支持三种格式：
+1. cookies.json 的数组
+2. {"CASLOGC": "...", "...": "..."}
+3. CASLOGC=...; CASTGC=...'></textarea>
+          </label>
+          <button id="cookie-import" class="btn btn-primary btn-block" type="button">导入 Cookie</button>
+          <p class="hint">Cookie 至少需要包含 CASLOGC。导入后可在面板里刷新课程。</p>
+        </div>
+      </div>
+    </section>
+
+    <!-- 控制台 -->
+    <section id="dashboard" class="dashboard" hidden>
+      <div class="dash-grid">
+        <div class="card courses-card">
+          <div class="card-head">
+            <div>
+              <p class="eyebrow">COURSES</p>
+              <h3>课程列表</h3>
+            </div>
+            <div class="card-head-actions">
+              <button id="refresh-courses" class="btn btn-ghost" type="button">刷新</button>
+            </div>
+          </div>
+          <div class="select-row">
+            <label class="check">
+              <input type="checkbox" id="select-all">
+              <span>全选</span>
+            </label>
+            <span id="course-count" class="muted">0 门课程</span>
+          </div>
+          <div id="course-list" class="course-list">
+            <div class="empty-state">点击“刷新”获取课程</div>
+          </div>
+        </div>
+
+        <div class="right-column">
+          <div class="card">
+            <div class="card-head">
+              <div>
+                <p class="eyebrow">TASK</p>
+                <h3>任务设置</h3>
+              </div>
+              <span id="task-badge" class="badge badge-off">空闲</span>
+            </div>
+
+            <div class="options-grid">
+              <label class="field compact">
+                <span>播放速度</span>
+                <input id="speed" type="number" min="0.1" step="0.1" placeholder="默认">
+              </label>
+              <label class="field compact">
+                <span>完成阈值</span>
+                <input id="threshold" type="number" min="0" step="0.01" placeholder="0.91">
+              </label>
+              <label class="field compact">
+                <span>单课时限（分钟）</span>
+                <input id="limit" type="number" min="0" step="1" value="0">
+              </label>
+              <label class="field compact">
+                <span>视频（courseId:videoId）</span>
+                <input id="videos" type="text" placeholder="可选，多个用逗号分隔">
+              </label>
+            </div>
+
+            <div class="switch-row">
+              <label class="check">
+                <input type="checkbox" id="tree-view" checked>
+                <span>显示课程目录</span>
+              </label>
+              <label class="check">
+                <input type="checkbox" id="progressbar-view">
+                <span>显示视频进度条</span>
+              </label>
+            </div>
+
+            <div class="btn-row">
+              <button id="start-selected" class="btn btn-primary" type="button">刷选中课程</button>
+              <button id="start-all" class="btn btn-secondary" type="button">刷全部课程</button>
+              <button id="stop-task" class="btn btn-danger" type="button" disabled>停止任务</button>
+            </div>
+            <p class="hint">停止会在当前视频处理结束后生效。</p>
+          </div>
+
+          <div class="card progress-card">
+            <div class="card-head">
+              <div>
+                <p class="eyebrow">PROGRESS</p>
+                <h3>任务进度</h3>
+              </div>
+              <span id="progress-percent" class="progress-percent">0%</span>
+            </div>
+            <div class="progress-track">
+              <div id="progress-bar" class="progress-fill"></div>
+            </div>
+            <div class="progress-meta">
+              <span id="progress-course">等待任务</span>
+              <span id="progress-video"></span>
+            </div>
+            <div id="progress-detail" class="progress-detail"></div>
+          </div>
+
+          <div class="card log-card">
+            <div class="card-head">
+              <div>
+                <p class="eyebrow">LIVE LOG</p>
+                <h3>运行日志</h3>
+              </div>
+              <button id="clear-log" class="btn btn-ghost" type="button">清空显示</button>
+            </div>
+            <pre id="log" class="log"></pre>
+          </div>
+        </div>
+      </div>
+    </section>
+  </main>
+
+  <div id="ableCaptchaEl" class="captcha-mount"></div>
+  <div id="toast" class="toast" hidden></div>
+
+  <script src="/static/app.js"></script>
+</body>
+</html>
