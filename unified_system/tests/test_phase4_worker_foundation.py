@@ -9,6 +9,7 @@ from sqlalchemy import select
 from unified_system.db import get_db
 from unified_system.models import Platform, PlatformAccount, Task
 from unified_system.platforms.chaoxing.adapter import ChaoxingAdapter
+from unified_system.platforms.chaoxing.manual_verify import check_cookie
 from unified_system.platforms.common import (
     AdapterCancelled, AdapterCapabilities, AdapterError, AdapterRegistry, AuthContext,
     CancellationToken, CourseSummary, HealthStatus, PlatformAdapter, PlatformInfo, UnsupportedCapability,
@@ -145,6 +146,19 @@ def test_chaoxing_candidate_is_unverified_and_not_dispatchable():
     adapter = ChaoxingAdapter()
     assert adapter.capabilities().worker_capabilities() == []
     assert adapter.health_check().healthy is False
+
+
+def test_manual_chaoxing_check_emits_only_count_and_never_enables_capabilities():
+    class RecordingAdapter:
+        def list_courses(self, auth):
+            assert auth.values["cookies"] == "manual-private-cookie"
+            return [object(), object()]
+
+    report = check_cookie(RecordingAdapter(), "manual-private-cookie")
+    assert report["result"] == "candidate_read_only_request_succeeded"
+    assert report["course_count"] == 2
+    assert report["capabilities_enabled"] is False
+    assert "manual-private-cookie" not in repr(report)
 
 
 def test_chaoxing_candidate_uses_isolated_cookie_session_and_parses_only_course_summary():
