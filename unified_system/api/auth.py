@@ -31,6 +31,11 @@ def _record_login(db, identifier: str, user: User | None, result: str) -> None:
         user_agent=(request.headers.get("User-Agent", "") or "")[:256],
     ))
     db.commit()
+    current_app.logger.info("authentication attempt", extra={
+        "event_type": "auth.login",
+        "result": result,
+        "user_id": str(user.id) if user else None,
+    })
 
 
 def _locked(db, email: str) -> bool:

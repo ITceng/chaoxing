@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from functools import wraps
 
-from flask import g, jsonify, session
+from flask import current_app, g, jsonify, session
 
 from unified_system.db import get_db
 from unified_system.security import get_current_user, has_permission, json_error, require_csrf
@@ -26,6 +26,11 @@ def permission_required(permission: str, csrf: bool = False):
         def wrapped(*args, **kwargs):
             db = get_db()
             if not has_permission(db, g.current_user.id, permission):
+                current_app.logger.warning("permission denied", extra={
+                    "event_type": "authz.permission_denied",
+                    "permission": permission,
+                    "user_id": str(g.current_user.id),
+                })
                 return json_error("Permission denied", 403)
             if csrf and not require_csrf():
                 return json_error("CSRF validation failed", 403)

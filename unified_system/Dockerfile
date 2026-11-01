@@ -26,4 +26,4 @@ EXPOSE 8088
 HEALTHCHECK --interval=20s --timeout=4s --start-period=30s --retries=5 \
   CMD python -c "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8088/api/v1/health/ready', timeout=3)" || exit 1
 
-CMD ["gunicorn", "--bind", "0.0.0.0:8088", "--workers", "2", "--threads", "4", "--timeout", "60", "--graceful-timeout", "30", "--keep-alive", "5", "--max-requests", "1000", "--max-requests-jitter", "100", "--access-logfile", "-", "--error-logfile", "-", "--access-logformat", "%(h)s %(m)s %(U)s %(s)s %(B)s %(L)s", "unified_system.wsgi:app"]
+CMD ["gunicorn", "--bind", "0.0.0.0:8088", "--workers", "2", "--threads", "4", "--timeout", "60", "--graceful-timeout", "30", "--keep-alive", "5", "--max-requests", "1000", "--max-requests-jitter", "100", "--error-logfile", "-", "unified_system.wsgi:app"]

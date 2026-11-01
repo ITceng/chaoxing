@@ -10,6 +10,7 @@ from typing import Any
 from unified_system.platforms.common import AdapterCancelled, AdapterError, AuthContext, CancellationToken, CourseSummary, HealthStatus, WorkerTask
 from unified_system.workers.runtime.client import WorkerClient, WorkerProtocolError
 from unified_system.workers.runtime.healthcheck import record_backend_heartbeat
+from unified_system.logging_utils import configure_json_logging
 
 
 logger = logging.getLogger("unified_system.worker")
@@ -70,6 +71,12 @@ class WorkerEngine:
         if not self.client.start_task(task_id, lease_token):
             self.client.complete_task(task_id, lease_token, "cancelled", result_summary={})
             return
+        logger.info("task started", extra={
+            "event_type": "worker.task.started",
+            "task_id": str(task_id),
+            "worker_id": self.client.settings.worker_id,
+            "platform_key": self.info.key,
+        })
 
         auth = AuthContext(
             account_id=str(task["platform_account_id"]),
@@ -134,7 +141,11 @@ class WorkerEngine:
                 self.client.complete_task(task_id, lease_token, "cancelled", error_code=code, result_summary={})
             else:
                 self.client.complete_task(task_id, lease_token, "failed", error_code=code)
-            logger.warning("task completed with adapter error code=%s", code)
+            logger.warning("task completed with adapter error", extra={
+                "event_type": "worker.task.completed", "result": "failed", "error_type": code,
+                "task_id": str(task_id), "worker_id": self.client.settings.worker_id,
+                "platform_key": self.info.key,
+            })
             return
         if kind == "account_validate":
             if not isinstance(value, dict) or type(value.get("authorized")) is not bool:
@@ -146,11 +157,19 @@ class WorkerEngine:
                 return
             summary = {"operation": "account_validate", "authorized": True, "read_only": True}
             self.client.complete_task(task_id, lease_token, "succeeded", result_summary=summary)
+            logger.info("task completed", extra={
+                "event_type": "worker.task.completed", "result": "succeeded", "task_id": str(task_id),
+                "worker_id": self.client.settings.worker_id, "platform_key": self.info.key,
+            })
             return
         try:
             summary = _result_summary(kind, value)
             course_catalog = _course_catalog_payload(kind, value, self.info.key)
             self.client.complete_task(task_id, lease_token, "succeeded", result_summary=summary, course_catalog=course_catalog)
+            logger.info("task completed", extra={
+                "event_type": "worker.task.completed", "result": "succeeded", "task_id": str(task_id),
+                "worker_id": self.client.settings.worker_id, "platform_key": self.info.key,
+            })
         except (TypeError, ValueError):
             self.client.complete_task(task_id, lease_token, "failed", error_code="unsafe_adapter_output")
             logger.warning("task result rejected by safe output boundary")
@@ -191,17 +210,29 @@ def _result_summary(kind: str, result: Any) -> dict[str, Any]:
 
 
 def run_forever(engine: WorkerEngine) -> None:
-    logger.info("worker starting platform=%s id=%s capabilities=%s", engine.info.key, engine.client.settings.worker_id, sorted(engine.task_kinds))
+    configure_json_logging(logging.getLogger(), "worker")
+    logger.info("worker starting", extra={
+        "event_type": "worker.started",
+        "platform_key": engine.info.key,
+        "worker_id": engine.client.settings.worker_id,
+    })
     try:
         while not engine.stop_event.is_set():
             try:
                 claimed = engine.run_once()
             except WorkerProtocolError as exc:
-                logger.warning("worker protocol failure code=%s status=%s", exc.code, exc.status)
+                logger.warning("worker protocol failure", extra={
+                    "event_type": "worker.protocol.failure", "error_type": exc.code,
+                    "status": exc.status, "worker_id": engine.client.settings.worker_id,
+                    "platform_key": engine.info.key,
+                })
                 engine.stop_event.wait(engine.client.settings.poll_interval_seconds)
                 continue
             except Exception as exc:  # no str(exc): third-party responses may contain credentials
-                logger.error("worker loop error type=%s", type(exc).__name__)
+                logger.error("worker loop error", extra={
+                    "event_type": "worker.loop.failure", "error_type": type(exc).__name__,
+                    "worker_id": engine.client.settings.worker_id, "platform_key": engine.info.key,
+                })
                 engine.stop_event.wait(engine.client.settings.poll_interval_seconds)
                 continue
             if not claimed:

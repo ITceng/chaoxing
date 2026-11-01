@@ -22,7 +22,9 @@ def test_http_bootstrap_renders_only_explicit_fqdn_and_keeps_acme_only():
     assert "return 503;" in rendered
     assert "return 308" not in rendered
     assert "Strict-Transport-Security" not in rendered
-    assert "$request_method $uri $server_protocol" in rendered
+    assert '"method":"$request_method"' in rendered
+    assert '"uri":"$uri"' in rendered
+    assert "$request_uri" not in rendered
     assert "$request " not in rendered
 
 
@@ -84,7 +86,10 @@ def test_https_template_has_tls_redirect_limits_and_no_public_internal_routes():
     assert "${HSTS_HEADER}" in template
     assert "includeSubDomains" not in template
     assert "preload" not in template
-    assert "$request_method $uri $server_protocol" in template
+    assert '"method":"$request_method"' in template
+    assert '"uri":"$uri"' in template
+    log_format = next(line for line in template.splitlines() if line.startswith("log_format unified_safe"))
+    assert "$request_uri" not in log_format
     assert "$request\"" not in template
 
 

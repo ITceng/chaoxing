@@ -2,8 +2,7 @@
 # requests receive 503 until a trusted certificate is issued and the HTTPS template is installed.
 # Render with deploy/nginx/render-nginx-config.py http after DNS/port-80 authorization.
 server_tokens off;
-log_format unified_safe '$remote_addr [$time_local] "$request_method $uri $server_protocol" '
-                        '$status $body_bytes_sent $request_time';
+log_format unified_safe escape=json '{"timestamp":"$time_iso8601","service":"host-nginx","event_type":"http.access","remote_addr":"$remote_addr","request_id":"$request_id","method":"$request_method","uri":"$uri","status":$status,"bytes":$body_bytes_sent,"duration_seconds":$request_time}';
 
 server {
     listen 80 default_server;

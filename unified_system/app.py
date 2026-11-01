@@ -1,8 +1,11 @@
 from __future__ import annotations
 
 import click
+import re
 from pathlib import Path
-from flask import Flask, jsonify, send_from_directory
+from time import perf_counter
+from uuid import uuid4
+from flask import Flask, g, jsonify, request, send_from_directory
 from sqlalchemy import select, text
 from sqlalchemy.exc import OperationalError, SQLAlchemyError, TimeoutError as SQLAlchemyTimeoutError
 from werkzeug.middleware.proxy_fix import ProxyFix
@@ -19,6 +22,7 @@ from unified_system.api.worker import bp as worker_bp
 from unified_system.bootstrap import seed_catalog
 from unified_system.config import settings_from_env
 from unified_system.db import Base, close_db, get_db, init_database
+from unified_system.logging_utils import configure_json_logging
 from unified_system.models import AIProviderConfig, PlatformAccountSecret, Role, User, UserRole
 from unified_system.security import (
     decrypt_secret, encrypted_with_active_key, hash_password, validate_credential_keyring,
@@ -29,6 +33,7 @@ from unified_system.security import (
 def create_app(test_config: dict | None = None) -> Flask:
     app = Flask(__name__, static_folder="static", static_url_path="/static")
     app.config.update(settings_from_env())
+    configure_json_logging(app.logger, "backend")
     if test_config:
         app.config.update(test_config)
     proxy_hops = int(app.config.get("TRUSTED_PROXY_HOPS", 0))
@@ -62,6 +67,14 @@ def create_app(test_config: dict | None = None) -> Flask:
     app.register_blueprint(shared_admin_bp)
     app.register_blueprint(tasks_bp)
     app.register_blueprint(worker_bp)
+
+    request_id_re = re.compile(r"^[A-Za-z0-9_-]{8,64}$")
+
+    @app.before_request
+    def start_request_context():
+        supplied = request.headers.get("X-Request-ID", "")
+        g.request_id = supplied if request_id_re.fullmatch(supplied) else uuid4().hex
+        g.request_started_at = perf_counter()
 
     frontend_dist = Path(__file__).resolve().parent / "frontend" / "dist"
 
@@ -110,6 +123,19 @@ def create_app(test_config: dict | None = None) -> Flask:
             "img-src 'self' data:; connect-src 'self'; frame-ancestors 'none'",
         )
         # HSTS belongs at the verified HTTPS termination point, not the HTTP-capable API process.
+        request_id = getattr(g, "request_id", uuid4().hex)
+        response.headers.setdefault("X-Request-ID", request_id)
+        duration_ms = round((perf_counter() - getattr(g, "request_started_at", perf_counter())) * 1000, 2)
+        status = response.status_code
+        level = 40 if status >= 500 else 30 if status >= 400 else 20
+        app.logger.log(level, "request completed", extra={
+            "event_type": "http.request.completed",
+            "request_id": request_id,
+            "endpoint": request.url_rule.rule if request.url_rule else "unmatched",
+            "method": request.method,
+            "status": status,
+            "duration_ms": duration_ms,
+        })
         return response
 
     @app.errorhandler(413)
