@@ -57,7 +57,8 @@ Redis: deliberately omitted. The persistent PostgreSQL task queue remains author
 - `unified_system/deploy/nginx/unified-learning-logrotate` — host Nginx log rotation template.
 - `unified_system/deploy/.env.production.example` — secret-free production environment template. Copy locally to `.env.production`; never commit it.
 - `unified_system/postgres/init/10-create-app-db.sh` — first-volume initialization script that creates a cluster administrator, a separate migration owner, and a restricted runtime DML role. Role names are SQL-identifier-validated; passwords must be hex so they are URL-safe in the SQLAlchemy DSN. The script reads psql variables from process environment via `\getenv`; it does not echo password values.
-- `unified_system/deploy/server-preflight.sh` — non-mutating target-host inventory report.
+- `unified_system/deploy/server-preflight.sh` — legacy non-mutating inventory helper; its raw network/socket output is not the recommended shareable report.
+- `unified_system/deploy/phase6e-preflight.sh` — sanitized, read-only Phase 6E host/repository preflight; no deploy, build, DNS, or service changes.
 - `unified_system/deploy/backup-postgres.sh`, `restore-postgres.sh` — encrypted `age` backup and explicitly confirmed destructive restore.
 - `unified_system/deploy/systemd/unified-learning-backup.{service,timer}` — daily backup schedule template (installation path must be adjusted if the checkout is not `%h/chaoxing`).
 - `unified_system/deploy/health-report.sh` — Compose, edge/backend readiness, disk and resource snapshot.
@@ -79,16 +80,9 @@ The image tags in the examples (`postgres:16-alpine`, `python:3.12-slim-bookworm
 
 ### User-provided target facts (not independently verified)
 
-The requested target is Linux/Ubuntu, kernel `6.8.0`, user directory `/home/agentuser`, host Python `3.12.3`. The exact Ubuntu release, architecture, resources, Docker/Compose versions, network/DNS, listening ports, Docker-group permissions, Nginx/domain/certificate state remain unknown. No SSH or remote execution authority was available.
+The requested target is Linux/Ubuntu, kernel `6.8.0`, user directory `/home/agentuser`, host Python `3.12.3`. These are user-provided claims only. The exact Ubuntu release, architecture, resources, Docker/Compose versions, listening ports, Docker-group permissions and Nginx state remain unknown. No target address or remote execution channel was supplied; no SSH attempt or remote change was made.
 
-Run the non-mutating report **on the target**, not in Arena. Replace the placeholder with a real, authorized FQDN before running the second command; do not submit the placeholder literally:
-
-```bash
-bash /home/agentuser/chaoxing/unified_system/deploy/server-preflight.sh
-PUBLIC_DOMAIN=REPLACE_WITH_REGISTERED_FQDN bash /home/agentuser/chaoxing/unified_system/deploy/server-preflight.sh
-```
-
-The second command makes only DNS/HTTPS readiness probes to the supplied domain. The script also reports Docker/Compose, Nginx, age, systemd, curl and OpenSSL availability/version. It does not install software, open ports, alter firewall rules, or deploy services. Save its output without including credentials. Confirm Ubuntu version, CPU/memory/disk, Docker and Compose versions, Docker socket permissions, ports 80/443/8080/5432/6379, DNS and certificate readiness before selecting resource limits or pinning image digests.
+For the next step, use the Phase 6E read-only collector `unified_system/deploy/phase6e-preflight.sh` (described in [`phase6e-preflight.md`](phase6e-preflight.md)), not the older `server-preflight.sh`. The older script prints IP/DNS/socket details and is not the recommended sanitized evidence collector. Run the new collector on the target with `REPO_DIR=/home/agentuser/chaoxing`; it checks the Git worktree against the expected `ddde002` baseline, host/resources, tool versions, current container service states, env-file presence/modes, Compose syntax and listening **port numbers only**. It does not probe a domain, contact an external service, or print secret contents. It does not install software, start/stop services, alter firewall/DNS/SSH, or deploy anything. Share its output only after reviewing it; never include environment-file contents, credentials, private keys or backup files.
 
 The application containers use the Python 3.12 image line and do not depend on the host Python for runtime. Host Python is used only for operations/tests such as the PostgreSQL test runner. The stated host Python `3.12.3` still needs on-target confirmation.
 
@@ -184,76 +178,45 @@ docker compose --env-file deploy/.env.production -f docker-compose.prod.yml stop
 
 To enable an individual Worker later, first merge a reviewed adapter, issue its dedicated token, verify platform authorization and task capabilities, then activate only its profile (example: `--profile worker-chaoxing`). No profile should be started with a blank factory/token. Current adapters remain unverified, so none is enabled by this plan.
 
-## 8. Backups, retention and recovery
+## 8. Backups, retention and recovery — superseded guidance
 
-Backups are PostgreSQL custom-format dumps, created through the private database container, checked with `pg_restore --list`, encrypted to `BACKUP_AGE_RECIPIENT`, stored with directory mode `0700` and archive mode `0600`, checksum-reported, and pruned by `BACKUP_RETENTION_DAYS` (default 30). The backup script requires `age`; the public recipient is not secret. Keep the corresponding private age identity offline/in a secret manager and separately protect the Fernet credential-encryption key.
+This section is retained as Phase 6A history only. Its earlier restore command and timer schedule are obsolete; **do not run them**. Phase 6D supersedes this procedure with manifest-verified encrypted logical backups, current daily/weekly/monthly retention, a scheduled 03:15 UTC timer, and a restore rehearsal that only creates a new database in a separately named isolated Compose project/volume. The current restore script has no overwrite/production restore mode and requires an isolated env file, unique restore project, `_restore`/`_test` target, protected age identity, verified archive manifest and typed `RESTORE-ISOLATED:<target>` confirmation. Do not use the old `--confirm-overwrite` example.
 
-The systemd timer template schedules a daily 03:15 host-local-time run (with a randomized delay). Adjust repository paths, verify user/group/Docker socket access, then validate and install on the target:
+For current requirements, exact invocation shape and evidence boundary, see [`phase6d-operations-recovery.md`](phase6d-operations-recovery.md), especially sections 2–3. The restore example there is still only an operator procedure, not evidence that a restore has run. No encrypted archive, real key, PostgreSQL restore, or timer was exercised in Arena. A backup command is not a recovery test; production remains blocked until a newly created encrypted backup is restored into a truly isolated PostgreSQL environment and the resulting report/relationships/revision/keyring checks are reviewed.
 
-```bash
-sudo systemd-analyze verify deploy/systemd/unified-learning-backup.service deploy/systemd/unified-learning-backup.timer
-sudo install -o root -g root -m 0644 deploy/systemd/unified-learning-backup.service /etc/systemd/system/
-sudo install -o root -g root -m 0644 deploy/systemd/unified-learning-backup.timer /etc/systemd/system/
-sudo systemctl daemon-reload
-sudo systemctl enable --now unified-learning-backup.timer
-systemctl list-timers unified-learning-backup.timer
-```
+## 9. Logging, monitoring and safety checklist — historical snapshot
 
-Off-site replication of encrypted archives is not configured; choose and test an approved remote destination before production.
+The network, proxy, request-size, CSRF, logging-redaction and Worker-route controls described above are the Phase 6A design snapshot, not proof of an installed or running service. For current Phase 6D structured logging, log/journal retention, host/application monitoring, alert rules and dashboard behavior—and their limits—see [`phase6d-operations-recovery.md`](phase6d-operations-recovery.md). External alert delivery is still not configured; log events do not equal paging or an acknowledged notification.
 
-Manual backup:
+The still-open gates include administrator MFA/server-side step-up for high-risk actions, historical AI-key supplier-side revocation/exposure review, a reviewed restricted egress design before external AI or Worker requests, real platform adapter authorization, and target-host/PostgreSQL/restore/HTTPS acceptance. Keep every Worker profile disabled. Do not treat designed rate limits, health probes, redaction filters, a dashboard, or local tests as evidence of effective controls on the actual host.
 
-```bash
-bash deploy/backup-postgres.sh
-```
+## 10. Validation report and release blockers — Phase 6A snapshot
 
-Restore requires a readable age identity file with no group/other permissions, validates decryption/archive listing first, asks for `RESTORE:<database-name>`, stops enabled Worker profiles plus edge/backend, then performs a destructive single-transaction restore as the migration owner. It intentionally leaves edge/backend stopped for inspection:
+The test counts below are preserved only as historical evidence from the Phase 6A worktree at that time. They are not the latest branch results and are not Phase 6E acceptance. The later Phase 6D local results and their exact boundaries are recorded in [`phase6d-operations-recovery.md`](phase6d-operations-recovery.md); the Phase 6E host preflight status is recorded in [`phase6e-preflight.md`](phase6e-preflight.md).
 
-```bash
-BACKUP_AGE_IDENTITY_FILE=/secure/path/age-identity.txt \
-  bash deploy/restore-postgres.sh /secure/path/unified_learning_....dump.age --confirm-overwrite
-# Inspect logs/data before explicitly starting backend/edge again.
-```
+### Completed locally in the Arena development environment (Phase 6A snapshot)
 
-A backup command is not a recovery test. No real dump, encryption, restore, permission, retention, or systemd-timer test ran here. A scheduled backup is not production-ready until a restore drill on an isolated PostgreSQL instance has verified database content and key recovery.
-
-## 9. Logging, monitoring and safety checklist
-
-- Backend liveness: `GET /api/v1/health`; readiness performs `SELECT 1` at `GET /api/v1/health/ready`. The edge container has `/healthz`; PostgreSQL uses `pg_isready`.
-- Worker liveness is the persisted `WorkerInstance.last_seen_at` heartbeat. The Worker Docker healthcheck only passes after a fresh successful backend heartbeat (temporary marker in tmpfs); Docker marks stale Workers unhealthy but restart policies do not automatically restart an otherwise-running unhealthy process.
-- Host Nginx rate-limits login and general API traffic; the app also maintains login-failure limits. CORS remains disabled; browser/API are same-origin and state-changing routes require CSRF. Body size is capped at 1 MiB at Flask and both Nginx layers.
-- SQLAlchemy hides SQL parameters; DB error logs contain only the exception class. Gunicorn and Nginx access logs omit query strings and request bodies. No app/proxy log format includes passwords, Cookies, AI keys or Authorization headers.
-- Container stdout/stderr uses Docker `json-file` rotation (`10m` × 5 files). Host Nginx logs use the provided daily/14-file logrotate policy. Monitor `docker compose ps`, Worker heartbeat status, disk usage (`health-report.sh`) and host log/disk alerts; external alerting/metrics collection is not included.
-- Database and Worker interfaces have no published ports; Worker routes are rejected at both Nginx layers.
-- SSRF: the offline-tested Phase 5 Provider helper accepts only exact reviewed HTTPS host/path pairs, rejects non-443 ports/userinfo/query/fragment, verifies TLS and disables redirects. It is not wired to an admin-configurable Provider API; do not add arbitrary endpoint configuration. Compose runtime egress is disabled by default.
-- Uploads: no document/file-upload feature is enabled; Flask and both Nginx layers cap request bodies at 1 MiB. File parsing and virus scanning remain future work.
-- The Phase 5 endpoint allowlist is not a replacement for the still-missing admin key-management/rotation subsystem or real Provider connectivity tests.
-
-## 10. Validation report and release blockers
-
-### Completed locally in the Arena development environment
-
-- Backend tests: `.venv/bin/pytest unified_system/tests -q` — **92 passed, 2 skipped**. The skipped tests require the disposable PostgreSQL URL; all executed DB behavior used SQLite.
+- Backend tests: `.venv/bin/pytest unified_system/tests -q` — **92 passed, 2 skipped**. The skipped tests required the disposable PostgreSQL URL; all executed DB behavior used SQLite.
 - SQLite Alembic `upgrade head`, `alembic check`, and `downgrade base` passed on a throwaway `/tmp` database; `pip check` reported no broken requirements.
 - Frontend: Vitest **5 passed**, TypeScript check passed, Vite production build passed.
 - Python `py_compile`, shell `bash -n`/`sh -n`, `git diff --check`, and Gunicorn `--check-config` passed.
-- `pip download --require-hashes --no-deps -r requirements-prod.lock` verified the pinned production artifact hashes for the current Arena Python/platform.
+- `pip download --require-hashes --no-deps -r requirements-prod.lock` verified pinned production artifact hashes for the Arena Python/platform at that time.
 - PyYAML parsed `docker-compose.prod.yml`; structural checks confirmed edge loopback-only port mapping, no published database/backend/Worker ports, internal-only networks and opt-in Worker profiles.
 
 ### Not executed / not claimed
 
-- Docker/Compose config validation by the Docker Compose binary, image builds, image scan, container startup, restart/persistence tests, container log rotation, Nginx syntax test, and host Nginx/TLS tests: not run (Docker and Nginx unavailable).
-- PostgreSQL server/migration/concurrency tests, production connection pool behavior, Postgres backup/restore and recovery drill: not run (no Postgres service/client available).
-- Target Ubuntu release/kernel/Python/Docker/Compose/resources/network/ports/permissions/DNS/HTTPS: not checked; no remote access.
-- Public DNS changes, firewall changes, systemd installation, port exposure, and real platform or AI API calls: not performed.
+- Docker/Compose config validation by the Docker Compose binary, image builds/scans, container startup, restart/persistence tests, container log rotation, Nginx syntax test and host Nginx/TLS tests were not run in that environment.
+- PostgreSQL server/migration/concurrency tests, production connection-pool behavior, PostgreSQL backup/restore and recovery drill were not run.
+- Target Ubuntu release/kernel/Python/Docker/Compose/resources/ports/permissions/DNS/HTTPS were not checked; no remote target session was provided.
+- Public DNS/firewall changes, systemd installation, port exposure, and real platform or AI API calls were not performed.
 
-### Must remain incomplete
+### Production gates remain open
 
 1. Supplier-side revocation/rotation and scope review of the historical AI key: unconfirmed; do not release AI.
-2. Phase 5 AI encryption key management, admin Provider config, models, quotas, conversations/history, assistant UI, file parsing and real provider validation.
-3. Real Learning Platform/Chaoxing and Zhihuishu authorization/Worker verification.
-4. Yinghua Go source is not buildable from the linked commit and is disallowed as written; do not enable its Compose profile.
-5. PostgreSQL live migration/concurrency testing and backup/restore drill.
-6. Target Ubuntu preflight, immutable image digest selection, Docker/Nginx build/start validation, monitoring/alerting and public HTTPS readiness.
+2. Administrator MFA/server-side step-up and complete high-risk security/audit acceptance.
+3. Real Learning Platform/Chaoxing and Zhihuishu adapter/platform authorization; Yinghua remains blocked because the linked Go source is not buildable and is disallowed as written.
+4. PostgreSQL live migrations/constraints/transactions/locks/concurrency/fencing/recovery and isolated encrypted backup/restore/keyring rehearsal.
+5. Target Ubuntu preflight, immutable image digest review, Docker/Compose and Nginx validation, monitoring plus an authenticated external alert channel, real authorized public HTTPS, functional tests and controlled gray release.
+6. Reviewed restricted egress and real provider validation before any external AI/Worker calls; keep all Worker profiles disabled in the meantime.
 
-Phase 6A's historical deployment preparation is superseded by the follow-up checks in [`phase6b-container-validation.md`](phase6b-container-validation.md) and [`phase6c-nginx-https-security.md`](phase6c-nginx-https-security.md). Docker/PostgreSQL acceptance, target-host validation, authorized DNS/firewall/certificate work and public HTTPS remain outstanding. Do not open the stack to the Internet, activate a Worker, or claim production readiness until those blockers are explicitly resolved and authorized.
+No item above is closed by this historical preparation or by the new read-only preflight. Do not publish the stack, activate Workers, claim launch/acceptance, or create a production release tag until the relevant gates pass with evidence from the authorized host and public-network vantage point where required.
