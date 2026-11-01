@@ -32,8 +32,9 @@ repo=/home/agentuser/chaoxing
 collector="$(mktemp)"
 trap 'rm -f "$collector"' EXIT
 
-git -C "$repo" fetch --no-tags origin arena/bd5e1acd-chaoxing
-git -C "$repo" show origin/arena/bd5e1acd-chaoxing:unified_system/deploy/phase6e-preflight.sh > "$collector"
+git -C "$repo" fetch --no-tags origin \
+  refs/heads/arena/bd5e1acd-chaoxing:refs/remotes/origin/arena/bd5e1acd-chaoxing
+git -C "$repo" show refs/remotes/origin/arena/bd5e1acd-chaoxing:unified_system/deploy/phase6e-preflight.sh > "$collector"
 chmod 700 "$collector"
 REPO_DIR="$repo" \
 PHASE6E_EXPECTED_BRANCH=arena/bd5e1acd-chaoxing \
