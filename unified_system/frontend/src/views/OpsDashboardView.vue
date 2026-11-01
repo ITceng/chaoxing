@@ -46,6 +46,12 @@ function serviceName(key: string): string {
   return ({ nginx: 'Host Nginx', postgres: 'PostgreSQL', backend: 'API 后端', edge: '前端边缘代理',
     'worker-chaoxing': '超星 Worker', 'worker-zhihuishu': '智慧树 Worker', 'worker-yinghua': '英华 Worker' } as Record<string, string>)[key] || key
 }
+function opsStatusClass(state?: string): string {
+  if (['running', 'active', 'ready', 'ok', 'valid', 'online'].includes(state || '')) return 'status-ok'
+  if (['unhealthy', 'inactive', 'failed', 'not_ready', 'expired', 'offline', 'degraded'].includes(state || '')) return 'status-danger'
+  if (['not_deployed', 'not_integrated', 'unknown', 'missing', 'stale', 'invalid'].includes(state || '')) return 'status-off'
+  return statusClass(state)
+}
 function serviceText(state?: string): string {
   return ({ running: '运行中', starting: '启动中', active: '运行中', unhealthy: '异常', inactive: '未运行', failed: '失败',
     not_deployed: '未部署', unknown: '未知', ready: '就绪', not_ready: '未就绪',
@@ -96,7 +102,7 @@ onMounted(load)
             <div class="ops-service-list">
               <div v-for="(service, key) in overview.services" :key="key" class="ops-service-row">
                 <span class="ops-service-name">{{ serviceName(String(key)) }}</span>
-                <span class="status-pill" :class="statusClass(service.state)">{{ serviceText(service.state) }}</span>
+                <span class="status-pill" :class="opsStatusClass(service.state)">{{ serviceText(service.state) }}</span>
                 <span class="ops-service-count">{{ service.instances === null ? '实例数未知' : `${service.instances} 个实例` }} · CPU {{ percent(service.resources.cpu_percent) }} · 内存 {{ bytes(service.resources.memory_used_bytes) }} / {{ bytes(service.resources.memory_limit_bytes) }} · PID {{ textOrUnknown(service.resources.pids_total?.toString()) }}</span>
               </div>
             </div>
@@ -122,7 +128,7 @@ onMounted(load)
           <div class="surface-title"><div><h2>平台 Worker 心跳</h2><p>在线只按数据库心跳与 TTL 判定；未接入平台保持“未接入”。</p></div></div>
           <el-table :data="overview.workers.platforms" class="data-table" row-key="key">
             <el-table-column label="平台" prop="name" min-width="160" />
-            <el-table-column label="接入状态" min-width="120"><template #default="{row}"><span class="status-pill" :class="statusClass(row.integration_status)">{{ serviceText(row.integration_status) }}</span></template></el-table-column>
+            <el-table-column label="接入状态" min-width="120"><template #default="{row}"><span class="status-pill" :class="opsStatusClass(row.integration_status)">{{ serviceText(row.integration_status) }}</span></template></el-table-column>
             <el-table-column label="Worker" min-width="110"><template #default="{row}">{{ row.integration_status === 'active' ? `${row.online_workers} 在线 / ${row.worker_count} 已登记` : '未知 / 未接入' }}</template></el-table-column>
             <el-table-column label="最近心跳" min-width="175"><template #default="{row}">{{ dateTime(row.last_heartbeat_at) }}</template></el-table-column>
             <template #empty><EmptyState title="平台目录暂无记录" description="这里只显示数据库中的平台配置与真实心跳。" /></template>

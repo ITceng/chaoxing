@@ -108,7 +108,7 @@ The following were performed in the Arena checkout, without starting services or
 | Real public HTTPS | **Not tested**; no domain/certificate/DNS changes | Only after explicit authorization, verify certificate chain/name/expiry, redirects, headers, cookies, rate limits and renewal from an external vantage point. |
 | PostgreSQL/Compose | **Not tested** in this phase; Phase 6B remains incomplete | Complete the disposable PostgreSQL locks/concurrency/migration/restart tests and Compose build/start/network checks in the Phase 6B report. |
 
-No public deployment, firewall/DNS/SSH change, production certificate request/renewal, server-side file installation, Docker build/start, Worker activation, AI/platform request or Phase 6D work occurred.
+At the Phase 6C cutoff, no public deployment, firewall/DNS/SSH change, production certificate request/renewal, server-side file installation, Docker build/start, Worker activation, AI/platform request or Phase 6D work had occurred. Phase 6D was subsequently implemented in code/docs; see [`phase6d-operations-recovery.md`](phase6d-operations-recovery.md). The later work did not perform any of the real-host actions listed here.
 
 ## 7. Security checklist and handoff
 
@@ -124,4 +124,4 @@ No public deployment, firewall/DNS/SSH change, production certificate request/re
 - [ ] Obtain explicit approval for a real hostname, DNS/firewall exposure, certificate issuance and staged public HTTPS verification.
 - [ ] Implement a real constrained egress gateway before any external AI/Worker calls; do not mistake empty proxy variables for one.
 
-Phase 6C ends at code/config/docs and portable tests. Do not publish, alter the target server, request a production certificate, enable a Worker, or start Phase 6D on the basis of this report. Continue only after the outstanding gates above have authorized, recorded evidence.
+Phase 6C itself ends at code/config/docs and portable tests. Phase 6D's subsequent implementation is documented separately and does not close the outstanding gates above. Do not publish or alter the target server, request a production certificate, or enable a Worker on the basis of either phase's portable tests. Continue deployment only after the target-host, PostgreSQL and security gates have authorized, recorded evidence.

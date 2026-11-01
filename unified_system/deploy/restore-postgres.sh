@@ -11,6 +11,11 @@ source "$DEPLOY_DIR/lib.sh"
 RESTORE_ENV_FILE="${RESTORE_ENV_FILE:-}"
 RESTORE_PROJECT_NAME="${RESTORE_PROJECT_NAME:-}"
 RESTORE_TARGET_DB="${RESTORE_TARGET_DB:-}"
+RESTORE_VERIFY_KEYRING="${RESTORE_VERIFY_KEYRING:-0}"
+if [[ ! "$RESTORE_VERIFY_KEYRING" =~ ^[01]$ ]]; then
+  printf 'RESTORE_VERIFY_KEYRING must be 0 or 1.\n' >&2
+  exit 2
+fi
 if [[ -z "$RESTORE_ENV_FILE" || -z "$RESTORE_PROJECT_NAME" || -z "$RESTORE_TARGET_DB" ]]; then
   printf 'Set RESTORE_ENV_FILE, RESTORE_PROJECT_NAME, and RESTORE_TARGET_DB for an isolated rehearsal.\n' >&2
   exit 2
@@ -134,18 +139,31 @@ mkdir -p -- "$report_dir"
 chmod 700 "$report_dir"
 report_tmp="$(mktemp "$report_dir/.restore-report.XXXXXX")"
 trap 'rm -f -- "$report_tmp"' EXIT HUP INT TERM
-query="SELECT 'users', count(*) FROM users UNION ALL SELECT 'roles', count(*) FROM roles UNION ALL SELECT 'invitations', count(*) FROM invitations UNION ALL SELECT 'platform_accounts', count(*) FROM platform_accounts UNION ALL SELECT 'platform_account_secrets', count(*) FROM platform_account_secrets UNION ALL SELECT 'account_access_grants', count(*) FROM account_access_grants UNION ALL SELECT 'tasks', count(*) FROM tasks UNION ALL SELECT 'task_events', count(*) FROM task_events UNION ALL SELECT 'audit_logs', count(*) FROM audit_logs UNION ALL SELECT 'ai_provider_configs', count(*) FROM ai_provider_configs UNION ALL SELECT 'ai_usage_logs', count(*) FROM ai_usage_logs ORDER BY 1"
+query="SELECT 'account_access_grants', count(*) FROM account_access_grants UNION ALL SELECT 'account_execution_leases', count(*) FROM account_execution_leases UNION ALL SELECT 'account_usage_logs', count(*) FROM account_usage_logs UNION ALL SELECT 'admin_user_scopes', count(*) FROM admin_user_scopes UNION ALL SELECT 'ai_provider_configs', count(*) FROM ai_provider_configs UNION ALL SELECT 'ai_usage_logs', count(*) FROM ai_usage_logs UNION ALL SELECT 'audit_logs', count(*) FROM audit_logs UNION ALL SELECT 'invitation_uses', count(*) FROM invitation_uses UNION ALL SELECT 'invitations', count(*) FROM invitations UNION ALL SELECT 'login_logs', count(*) FROM login_logs UNION ALL SELECT 'operational_alerts', count(*) FROM operational_alerts UNION ALL SELECT 'password_reset_tokens', count(*) FROM password_reset_tokens UNION ALL SELECT 'permissions', count(*) FROM permissions UNION ALL SELECT 'personal_platform_accounts', count(*) FROM personal_platform_accounts UNION ALL SELECT 'platform_account_secrets', count(*) FROM platform_account_secrets UNION ALL SELECT 'platform_accounts', count(*) FROM platform_accounts UNION ALL SELECT 'platform_courses', count(*) FROM platform_courses UNION ALL SELECT 'platforms', count(*) FROM platforms UNION ALL SELECT 'role_permissions', count(*) FROM role_permissions UNION ALL SELECT 'roles', count(*) FROM roles UNION ALL SELECT 'shared_platform_accounts', count(*) FROM shared_platform_accounts UNION ALL SELECT 'task_events', count(*) FROM task_events UNION ALL SELECT 'tasks', count(*) FROM tasks UNION ALL SELECT 'user_roles', count(*) FROM user_roles UNION ALL SELECT 'user_sessions', count(*) FROM user_sessions UNION ALL SELECT 'users', count(*) FROM users UNION ALL SELECT 'worker_instances', count(*) FROM worker_instances ORDER BY 1"
 counts="$(compose_restore exec -T postgres psql -X -A -t -F $'\t' --no-password --username "$owner" --dbname "$RESTORE_TARGET_DB" -v ON_ERROR_STOP=1 -c "$query" | tr -d '\r')"
 alembic_revision="$(compose_restore exec -T postgres psql -X -A -t --no-password --username "$owner" --dbname "$RESTORE_TARGET_DB" -v ON_ERROR_STOP=1 -c 'SELECT version_num FROM alembic_version' | tr -d '\r')"
+if [[ "$alembic_revision" != "0005_operational_alerts" ]]; then
+  printf 'Alembic revision is not the expected Phase 6D head; found %s.\n' "${alembic_revision:-missing}" >&2
+  exit 1
+fi
 unvalidated_fks="$(compose_restore exec -T postgres psql -X -A -t --no-password --username "$owner" --dbname "$RESTORE_TARGET_DB" -v ON_ERROR_STOP=1 -c "SELECT count(*) FROM pg_constraint WHERE contype='f' AND NOT convalidated" | tr -d '\r')"
-python3 - "$report_tmp" "$archive" "$RESTORE_TARGET_DB" "$source_version_num" "$target_version_num" "$source_checksum" "$alembic_revision" "$unvalidated_fks" "$counts" <<'PY'
+synthetic_keyring_test="not_requested"
+if [[ "$RESTORE_VERIFY_KEYRING" == "1" ]]; then
+  if compose_restore run --build --rm --no-deps backend flask --app unified_system.app:create_app verify-credential-keyring >/dev/null 2>&1; then
+    synthetic_keyring_test="passed"
+  else
+    printf 'Synthetic credential keyring verification failed; no stored credentials were decrypted.\n' >&2
+    exit 1
+  fi
+fi
+python3 - "$report_tmp" "$archive" "$RESTORE_TARGET_DB" "$source_version_num" "$target_version_num" "$source_checksum" "$alembic_revision" "$unvalidated_fks" "$synthetic_keyring_test" "$counts" <<'PY'
 import json
 import os
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
 
-out, archive, database, source_version, target_version, checksum, revision, invalid_fks, raw_counts = sys.argv[1:]
+out, archive, database, source_version, target_version, checksum, revision, invalid_fks, synthetic_keyring_test, raw_counts = sys.argv[1:]
 counts = {}
 for line in raw_counts.splitlines():
     if not line:
@@ -153,8 +171,12 @@ for line in raw_counts.splitlines():
     name, value = line.split("\t", 1)
     counts[name] = int(value)
 expected = {
-    "users", "roles", "invitations", "platform_accounts", "platform_account_secrets",
-    "account_access_grants", "tasks", "task_events", "audit_logs", "ai_provider_configs", "ai_usage_logs",
+    "account_access_grants", "account_execution_leases", "account_usage_logs", "admin_user_scopes",
+    "ai_provider_configs", "ai_usage_logs", "audit_logs", "invitation_uses", "invitations", "login_logs",
+    "operational_alerts", "password_reset_tokens", "permissions", "personal_platform_accounts",
+    "platform_account_secrets", "platform_accounts", "platform_courses", "platforms", "role_permissions",
+    "roles", "shared_platform_accounts", "task_events", "tasks", "user_roles", "user_sessions", "users",
+    "worker_instances",
 }
 if set(counts) != expected:
     raise SystemExit("restore validation did not return the complete required table set")
@@ -171,7 +193,8 @@ report = {
     "alembic_revision": revision,
     "unvalidated_foreign_keys": int(invalid_fks),
     "table_row_counts": counts,
-    "credential_decryption_test": "not_run; use an isolated synthetic fixture and matching keyring",
+    "synthetic_credential_keyring_roundtrip": synthetic_keyring_test,
+    "stored_credential_decryption": "not_performed",
 }
 with open(out, "w", encoding="utf-8") as handle:
     json.dump(report, handle, sort_keys=True, separators=(",", ":"))

@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import click
+import hmac
 import re
+import secrets
 from pathlib import Path
 from time import perf_counter
 from uuid import uuid4
@@ -171,6 +173,33 @@ def create_app(test_config: dict | None = None) -> Flask:
         with app.app_context():
             seed_catalog()
         click.echo("Database schema and platform catalog initialized.")
+
+    @app.cli.command("verify-credential-keyring")
+    def verify_credential_keyring_command():
+        """Round-trip synthetic test data through each configured key without reading stored credentials."""
+        with app.app_context():
+            try:
+                keys, active_id = credential_keyring()
+                synthetic = f"phase6d-keyring-self-test:{secrets.token_urlsafe(24)}"
+                for key_id, cipher in keys.items():
+                    ciphertext = f"v1:{key_id}:{cipher.encrypt(synthetic.encode('utf-8')).decode('ascii')}"
+                    if not hmac.compare_digest(decrypt_secret(ciphertext), synthetic):
+                        raise ValueError("synthetic round-trip mismatch")
+                legacy_test = "not_configured"
+                legacy_cipher = keys.get("legacy")
+                if legacy_cipher is not None:
+                    legacy_value = legacy_cipher.encrypt(synthetic.encode("utf-8")).decode("ascii")
+                    if not hmac.compare_digest(decrypt_secret(legacy_value), synthetic):
+                        raise ValueError("legacy synthetic round-trip mismatch")
+                    legacy_test = "passed"
+            except Exception as exc:
+                raise click.ClickException(
+                    f"Credential keyring synthetic test failed ({type(exc).__name__}); no database rows were read."
+                ) from None
+        click.echo(
+            f"Synthetic credential verification passed for {len(keys)} configured key(s); "
+            f"active_key_id={active_id}; legacy={legacy_test}; no stored rows were read."
+        )
 
     @app.cli.command("ops-check")
     def ops_check_command():

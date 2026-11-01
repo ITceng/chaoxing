@@ -176,6 +176,17 @@ python main.py -a ask  # 使用询问模式
 
 与题库配置类似，不填写视为不使用，按照注释填写想要使用的外部通知服务（也是`provider`，大小写要一致），并填写必要的`url`
 
+## Unified system deployment & recovery (experimental)
+
+The separate `unified_system/` service has Phase 6A–6D deployment, security, encrypted PostgreSQL backup/recovery, key custody, logging and operations-dashboard documentation:
+
+- [Phase 6A deployment](docs/phase6a-deployment.md)
+- [Phase 6B container validation](docs/phase6b-container-validation.md)
+- [Phase 6C Nginx/HTTPS security](docs/phase6c-nginx-https-security.md)
+- [Phase 6D operations, backup/recovery and monitoring](docs/phase6d-operations-recovery.md)
+
+These are code and operational procedures, not a claim of production readiness. Real Docker, PostgreSQL backup/restore, target Ubuntu and public HTTPS acceptance remain outstanding; follow the phase-specific gates before deployment.
+
 ## :heart: CONTRIBUTORS
 
 ![Alt](https://repobeats.axiom.co/api/embed/d3931e84b4b2f17cbe60cafedb38114bdf9931cb.svg "Repobeats analytics image")  

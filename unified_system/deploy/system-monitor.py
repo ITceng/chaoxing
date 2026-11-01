@@ -221,6 +221,9 @@ def readiness(edge_port: str) -> dict[str, Any]:
 
 
 def latest_backup(backup_dir: Path) -> dict[str, Any]:
+    if backup_dir.is_symlink() or (backup_dir.exists() and not backup_dir.is_dir()):
+        return {"state": "unknown", "latest_at": None, "archive_name": None,
+                "archive_bytes": None, "age_seconds": None, "retained_count": None}
     manifests = []
     try:
         for sidecar in backup_dir.glob("unified_learning_*.dump.age.json"):
@@ -370,7 +373,8 @@ def main() -> int:
         "captured_at": captured,
         "host": {"cpu_percent": cpu_percent(), "memory_percent": memory_percent(),
                  "load_1m": load_1m, "root_disk": disk_metrics(Path("/")),
-                 "backup_disk": disk_metrics(backup_dir if backup_dir.exists() else Path("/"))},
+                 "backup_disk": disk_metrics(backup_dir) if backup_dir.exists() and backup_dir.is_dir() and not backup_dir.is_symlink() else
+                               {"total_bytes": None, "free_bytes": None, "used_percent": None}},
         "services": {"nginx": {"state": nginx_state}, **services},
         "readiness": readiness(edge_port),
         "backup": backup,

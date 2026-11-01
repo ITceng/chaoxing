@@ -104,7 +104,9 @@ def read_host_metrics(path: str | Path, *, now: datetime | None = None,
 
 def _safe_details(value: dict[str, Any] | None) -> dict[str, Any]:
     safe: dict[str, Any] = {}
-    for key, item in (value or {}).items():
+    if not isinstance(value, dict):
+        return safe
+    for key, item in value.items():
         if (not isinstance(key, str) or not _SAFE_DETAIL_KEY_RE.fullmatch(key)
                 or _SENSITIVE_DETAIL_KEY_RE.search(key)):
             continue
@@ -331,7 +333,7 @@ def _alert_signals(db: Session, metrics: dict[str, Any], now: datetime, worker_t
             if online == 0:
                 signals.append(AlertSignal("worker.no_fresh_heartbeat", "ERROR" if total else "WARNING",
                                            "Active platform has no Worker with a fresh heartbeat",
-                                           {"worker_count": total, "online_count": 0}, scope=platform.key))
+                                           {"platform_key": platform.key, "worker_count": total, "online_count": 0}, scope=platform.key))
 
     recent_cutoff = now - timedelta(minutes=15)
     failed_tasks = db.scalar(select(func.count(Task.id)).where(

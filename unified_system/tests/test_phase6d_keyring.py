@@ -61,6 +61,60 @@ def test_production_keyring_requires_valid_active_key_id():
         raise AssertionError("an invalid active key ID must fail startup validation")
 
 
+def test_synthetic_keyring_cli_checks_configured_keys_without_database_access(app, monkeypatch):
+    configure_rotation_keyring(app)
+    import unified_system.app as app_module
+
+    def unexpected_db_access():
+        raise AssertionError("synthetic keyring verification must not read the database")
+
+    monkeypatch.setattr(app_module, "get_db", unexpected_db_access)
+    result = app.test_cli_runner().invoke(args=["verify-credential-keyring"])
+    assert result.exit_code == 0, result.output
+    assert "2 configured key(s)" in result.output
+    assert "active_key_id=current_2026" in result.output
+    assert "legacy=passed" in result.output
+    assert "no stored rows were read" in result.output
+    assert "synthetic-test-secret" not in result.output
+
+
+def test_rotation_cli_wrong_confirmation_and_decrypt_failure_roll_back_all_rows(app):
+    old_key, _new_key = configure_rotation_keyring(app)
+    valid_legacy = Fernet(old_key.encode("ascii")).encrypt(b"synthetic-rollback-secret").decode("ascii")
+    invalid_versioned = "v1:unknown_key:synthetic-ciphertext"
+    with app.app_context():
+        db = get_db()
+        db.add_all([
+            AIProviderConfig(owner_user_id=None, provider="rollback-valid", endpoint="https://provider.invalid/v1",
+                             model="test", secret_ciphertext=valid_legacy, enabled=False),
+            AIProviderConfig(owner_user_id=None, provider="rollback-invalid", endpoint="https://provider.invalid/v1",
+                             model="test", secret_ciphertext=invalid_versioned, enabled=False),
+        ])
+        db.commit()
+
+    runner = app.test_cli_runner()
+    cancelled = runner.invoke(
+        args=["rotate-credential-encryption-key", "--apply"],
+        input="ROTATE:wrong-id\n",
+    )
+    assert cancelled.exit_code != 0
+    assert "cancelled" in cancelled.output.lower()
+    failed = runner.invoke(
+        args=["rotate-credential-encryption-key", "--apply"],
+        input="ROTATE:current_2026\n",
+    )
+    assert failed.exit_code != 0
+    assert "no rows were changed" in failed.output.lower()
+    assert valid_legacy not in failed.output
+    assert "synthetic-rollback-secret" not in failed.output
+    with app.app_context():
+        db = get_db()
+        valid_row = db.scalar(select(AIProviderConfig).where(AIProviderConfig.provider == "rollback-valid"))
+        invalid_row = db.scalar(select(AIProviderConfig).where(AIProviderConfig.provider == "rollback-invalid"))
+        assert valid_row.secret_ciphertext == valid_legacy
+        assert invalid_row.secret_ciphertext == invalid_versioned
+
+
 def test_rotation_cli_dry_run_and_apply_reencrypt_only_database_values(app):
     old_key, _new_key = configure_rotation_keyring(app)
     legacy_ciphertext = Fernet(old_key.encode("ascii")).encrypt(b"synthetic-provider-test-token").decode("ascii")
