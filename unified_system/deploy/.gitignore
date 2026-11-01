@@ -3,8 +3,12 @@
 !.env.production.example
 .env.phase6b
 .env.phase6b.*
+.env.restore
+.env.restore.*
+!.env.restore.example
 secrets/
 backups/
+restore-reports/
 *.dump
 *.dump.age
 *.partial

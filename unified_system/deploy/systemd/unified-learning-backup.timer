@@ -2,7 +2,7 @@
 Description=Daily encrypted PostgreSQL backup for the unified learning system
 
 [Timer]
-OnCalendar=*-*-* 03:15:00
+OnCalendar=*-*-* 03:15:00 UTC
 RandomizedDelaySec=15m
 Persistent=true
 Unit=unified-learning-backup.service
