@@ -1,0 +1,25 @@
+# Temporary ACME bootstrap vhost. It serves only HTTP-01 challenge files; all other
+# requests receive 503 until a trusted certificate is issued and the HTTPS template is installed.
+# Render with deploy/nginx/render-nginx-config.py http after DNS/port-80 authorization.
+server_tokens off;
+log_format unified_safe '$remote_addr [$time_local] "$request_method $uri $server_protocol" '
+                        '$status $body_bytes_sent $request_time';
+
+server {
+    listen 80 default_server;
+    server_name ${PUBLIC_DOMAIN};
+    access_log /var/log/nginx/unified-learning.access.log unified_safe;
+    error_log /var/log/nginx/unified-learning.error.log warn;
+
+    if ($host != ${PUBLIC_DOMAIN}) { return 444; }
+
+    location ^~ /.well-known/acme-challenge/ {
+        root /var/www/certbot;
+        default_type text/plain;
+        try_files $uri =404;
+    }
+
+    location / {
+        return 503;
+    }
+}

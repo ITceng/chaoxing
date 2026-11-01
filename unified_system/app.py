@@ -108,11 +108,11 @@ def create_app(test_config: dict | None = None) -> Flask:
         response.headers.setdefault("Permissions-Policy", "camera=(), microphone=(), geolocation=()")
         response.headers.setdefault(
             "Content-Security-Policy",
-            "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; "
-            "font-src 'self' https://fonts.gstatic.com; img-src 'self' data:; connect-src 'self'; frame-ancestors 'none'",
+            "default-src 'self'; base-uri 'self'; object-src 'none'; form-action 'self'; "
+            "script-src 'self'; style-src 'self'; style-src-attr 'unsafe-inline'; font-src 'self'; "
+            "img-src 'self' data:; connect-src 'self'; frame-ancestors 'none'",
         )
-        if app.config.get("APP_ENV") == "production" and app.config.get("COOKIE_SECURE"):
-            response.headers.setdefault("Strict-Transport-Security", "max-age=31536000; includeSubDomains")
+        # HSTS belongs at the verified HTTPS termination point, not the HTTP-capable API process.
         return response
 
     @app.errorhandler(413)

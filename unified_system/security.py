@@ -266,8 +266,19 @@ def origin_is_same_site() -> bool:
     if not origin:
         return True
     from urllib.parse import urlsplit
-    parsed = urlsplit(origin)
-    return parsed.netloc.lower() == request.host.lower() and parsed.scheme in ("http", "https")
+    try:
+        parsed = urlsplit(origin)
+    except ValueError:
+        return False
+    return (
+        parsed.scheme.lower() == request.scheme.lower()
+        and parsed.netloc.lower() == request.host.lower()
+        and parsed.username is None
+        and parsed.password is None
+        and not parsed.path
+        and not parsed.query
+        and not parsed.fragment
+    )
 
 
 def require_csrf() -> bool:

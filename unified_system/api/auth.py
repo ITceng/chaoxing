@@ -16,6 +16,7 @@ from unified_system.security import (
     hash_password, hash_token, iso_utc, json_error, new_csrf_token, normalize_email,
     request_fingerprint, user_permissions, user_public, user_roles, valid_email,
     validate_password, verify_password, ensure_current_session_record, revoke_user_sessions,
+    origin_is_same_site,
 )
 
 bp = Blueprint("auth_api", __name__, url_prefix="/api/v1/auth")
@@ -66,6 +67,8 @@ def _set_login_session(db, user: User) -> dict:
 
 @bp.post("/login")
 def login():
+    if not origin_is_same_site():
+        return json_error("Cross-origin request rejected", 403)
     data = request.get_json(silent=True) or {}
     email = normalize_email(data.get("email", ""))
     password = data.get("password", "")
@@ -85,6 +88,8 @@ def login():
 
 @bp.post("/register")
 def register():
+    if not origin_is_same_site():
+        return json_error("Cross-origin request rejected", 403)
     data = request.get_json(silent=True) or {}
     email = normalize_email(data.get("email", ""))
     display_name = str(data.get("display_name", "")).strip()[:120]
@@ -264,6 +269,8 @@ def change_password():
 
 @bp.post("/reset-password")
 def reset_password():
+    if not origin_is_same_site():
+        return json_error("Cross-origin request rejected", 403)
     data = request.get_json(silent=True) or {}
     token = str(data.get("token", "")).strip()
     new_password = data.get("new_password", "")

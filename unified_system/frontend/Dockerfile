@@ -13,6 +13,7 @@ RUN npm run build
 FROM ${NGINX_BASE} AS runtime
 
 COPY nginx/nginx.conf /etc/nginx/nginx.conf
+COPY nginx/security-headers.conf /etc/nginx/snippets/unified-learning-security-headers.conf
 COPY --from=build /workspace/frontend/dist /usr/share/nginx/html
 RUN mkdir -p /tmp/client_temp /tmp/proxy_temp /tmp/fastcgi_temp /tmp/uwsgi_temp /tmp/scgi_temp \
     && chown -R 101:101 /tmp/client_temp /tmp/proxy_temp /tmp/fastcgi_temp /tmp/uwsgi_temp /tmp/scgi_temp \

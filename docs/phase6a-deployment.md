@@ -16,8 +16,9 @@ Date: 2026-11-01. Active branch: `arena/bd5e1acd-chaoxing`. This document descri
 ```text
 Internet
    |
-   +--> Host Nginx (TLS certificates, request limits, safe access log)
-          |
+   +--> Host Nginx (future TLS boundary; only after domain/certificate/HTTPS checks)
+          |      `-- :80 ACME-only bootstrap, then HTTP redirect + HTTPS :443
+          |          (host template has HSTS disabled by default)
           +--> 127.0.0.1:8080 only
                  |
                  +--> Edge Nginx container (static Vue build; rejects Worker paths)
@@ -48,7 +49,11 @@ Redis: deliberately omitted. The persistent PostgreSQL task queue remains author
 - `unified_system/workers/Dockerfile` — multi-stage Python 3.12 generic Worker runtime, non-root and fail-closed adapter factory.
 - `unified_system/docker-compose.prod.yml` — production service/network/volume/resource/restart/logging profile definitions.
 - `unified_system/frontend/nginx/nginx.conf` — edge static serving, SPA fallback, API proxy, request-size limits and internal Worker-route denial.
-- `unified_system/deploy/nginx/unified-learning.conf` — host Nginx HTTP redirect/HTTPS/rate-limit/proxy template. Replace the example host and certificate paths only after DNS/TLS readiness is confirmed.
+- `unified_system/deploy/nginx/unified-learning.conf.template` and `unified-learning-http.conf.template` — parameterized HTTPS and ACME-only HTTP bootstrap host templates. Render with the validator; HSTS is withheld unless explicitly enabled after real HTTPS validation. See [`phase6c-nginx-https-security.md`](phase6c-nginx-https-security.md).
+- `unified_system/deploy/nginx/render-nginx-config.py` — FQDN/path validation and HTTPS certificate/key/expiry/mode checks; requires root for HTTPS rendering.
+- `unified_system/deploy/nginx/unified-learning-security-headers.conf` — host HTTPS security-header snippet, CSP included, HSTS deliberately excluded.
+- `unified_system/deploy/nginx/check-certificate-expiry.sh` and `certbot-deploy-hook.sh` — operator-run validity check and validate-before-reload renewal hook.
+- `unified_system/deploy/nginx/.env.nginx.example` — explicit non-domain placeholders for host renderer configuration; not a certificate or a live hostname.
 - `unified_system/deploy/nginx/unified-learning-logrotate` — host Nginx log rotation template.
 - `unified_system/deploy/.env.production.example` — secret-free production environment template. Copy locally to `.env.production`; never commit it.
 - `unified_system/postgres/init/10-create-app-db.sh` — first-volume initialization script that creates a cluster administrator, a separate migration owner, and a restricted runtime DML role. Role names are SQL-identifier-validated; passwords must be hex so they are URL-safe in the SQLAlchemy DSN. The script reads psql variables from process environment via `\getenv`; it does not echo password values.
@@ -76,11 +81,11 @@ The image tags in the examples (`postgres:16-alpine`, `python:3.12-slim-bookworm
 
 The requested target is Linux/Ubuntu, kernel `6.8.0`, user directory `/home/agentuser`, host Python `3.12.3`. The exact Ubuntu release, architecture, resources, Docker/Compose versions, network/DNS, listening ports, Docker-group permissions, Nginx/domain/certificate state remain unknown. No SSH or remote execution authority was available.
 
-Run the non-mutating report **on the target**, not in Arena:
+Run the non-mutating report **on the target**, not in Arena. Replace the placeholder with a real, authorized FQDN before running the second command; do not submit the placeholder literally:
 
 ```bash
 bash /home/agentuser/chaoxing/unified_system/deploy/server-preflight.sh
-PUBLIC_DOMAIN=learn.example.edu bash /home/agentuser/chaoxing/unified_system/deploy/server-preflight.sh
+PUBLIC_DOMAIN=REPLACE_WITH_REGISTERED_FQDN bash /home/agentuser/chaoxing/unified_system/deploy/server-preflight.sh
 ```
 
 The second command makes only DNS/HTTPS readiness probes to the supplied domain. The script also reports Docker/Compose, Nginx, age, systemd, curl and OpenSSL availability/version. It does not install software, open ports, alter firewall rules, or deploy services. Save its output without including credentials. Confirm Ubuntu version, CPU/memory/disk, Docker and Compose versions, Docker socket permissions, ports 80/443/8080/5432/6379, DNS and certificate readiness before selecting resource limits or pinning image digests.
@@ -163,16 +168,9 @@ docker compose --env-file deploy/.env.production -f docker-compose.prod.yml up -
 
 The one-off container is removed after the command. Docker administrators can inspect live container environments; use this only on a host whose Docker access is trusted.
 
-The Compose file's `edge` port is loopback-only; host Nginx must be installed/configured separately and the example host/certificate paths must be replaced. Do not install or enable the Nginx template until the domain resolves correctly, a valid certificate is present, and public exposure is authorized. Once explicitly approved, install the edited file and validate it before reload:
+The Compose file's `edge` port is loopback-only; host Nginx must be installed/configured separately. The previous single-file `unified-learning.conf` path is obsolete; do not copy it or hand-edit literal domain/certificate paths. Phase 6C now provides separately rendered ACME-bootstrap and HTTPS templates, a TLS validation renderer, staged HSTS activation, certificate-expiry checks, and a renewal hook. Follow [`phase6c-nginx-https-security.md`](phase6c-nginx-https-security.md) only after an authorized, real domain is confirmed. No Nginx host config has been installed or reloaded by this work.
 
-```bash
-sudo install -o root -g root -m 0644 deploy/nginx/unified-learning.conf /etc/nginx/conf.d/unified-learning.conf
-sudo nginx -t
-# Only after the operator's change window/approval:
-sudo systemctl reload nginx
-```
-
-The HTTP/HTTPS template refuses Worker routes and overwrites client-supplied forwarded headers before the edge/backend proxy chain. Flask `ProxyFix` trusts one hop only in this production profile.
+The templates refuse Worker routes and overwrite client-supplied forwarding headers before the edge/backend proxy chain. Flask `ProxyFix` trusts one hop only in the production profile.
 
 Useful operations after an authorized test deployment:
 
@@ -258,4 +256,4 @@ A backup command is not a recovery test. No real dump, encryption, restore, perm
 5. PostgreSQL live migration/concurrency testing and backup/restore drill.
 6. Target Ubuntu preflight, immutable image digest selection, Docker/Nginx build/start validation, monitoring/alerting and public HTTPS readiness.
 
-Phase 6A handoff ends here. Phase 6B's container review and remaining validation gates are tracked separately in [`phase6b-container-validation.md`](phase6b-container-validation.md). Do not open the stack to the Internet, activate a Worker, or claim production readiness until those blockers are explicitly resolved and authorized.
+Phase 6A's historical deployment preparation is superseded by the follow-up checks in [`phase6b-container-validation.md`](phase6b-container-validation.md) and [`phase6c-nginx-https-security.md`](phase6c-nginx-https-security.md). Docker/PostgreSQL acceptance, target-host validation, authorized DNS/firewall/certificate work and public HTTPS remain outstanding. Do not open the stack to the Internet, activate a Worker, or claim production readiness until those blockers are explicitly resolved and authorized.
