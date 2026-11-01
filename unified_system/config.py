@@ -58,6 +58,8 @@ def settings_from_env() -> dict:
         "INVITATION_MAX_TTL_DAYS": int(os.environ.get("INVITATION_MAX_TTL_DAYS", "365")),
         "WORKER_LEASE_TTL_SECONDS": int(os.environ.get("WORKER_LEASE_TTL_SECONDS", "60")),
         "WORKER_HEARTBEAT_TTL_SECONDS": int(os.environ.get("WORKER_HEARTBEAT_TTL_SECONDS", "90")),
+        "OPS_ALERT_COOLDOWN_SECONDS": _bounded_int("OPS_ALERT_COOLDOWN_SECONDS", 1800, 60, 86400),
+        "HOST_METRICS_PATH": os.environ.get("HOST_METRICS_PATH", "").strip(),
         "WORKER_TOKENS": {
             "chaoxing": os.environ.get("WORKER_TOKEN_CHAOXING", ""),
             "zhihuishu": os.environ.get("WORKER_TOKEN_ZHIHUISHU", ""),

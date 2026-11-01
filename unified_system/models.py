@@ -379,6 +379,31 @@ class AIUsageLog(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow, nullable=False, index=True)
 
 
+class OperationalAlert(Base):
+    __tablename__ = "operational_alerts"
+    id: Mapped[str] = mapped_column(String(32), primary_key=True, default=new_id)
+    fingerprint: Mapped[str] = mapped_column(String(64), nullable=False)
+    code: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
+    severity: Mapped[str] = mapped_column(String(16), nullable=False, index=True)
+    state: Mapped[str] = mapped_column(String(16), default="active", nullable=False, index=True)
+    title: Mapped[str] = mapped_column(String(160), nullable=False)
+    details: Mapped[dict] = mapped_column(JSON, default=dict, nullable=False)
+    first_seen_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow, nullable=False)
+    last_seen_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow, nullable=False)
+    last_notified_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    resolved_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    occurrence_count: Mapped[int] = mapped_column(Integer, default=1, nullable=False)
+    notification_failures: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    last_notification_error_type: Mapped[str] = mapped_column(String(64), default="", nullable=False)
+    __table_args__ = (
+        UniqueConstraint("fingerprint", name="uq_operational_alert_fingerprint"),
+        CheckConstraint("severity IN ('INFO', 'WARNING', 'ERROR', 'CRITICAL')", name="ck_operational_alert_severity"),
+        CheckConstraint("state IN ('active', 'resolved')", name="ck_operational_alert_state"),
+        CheckConstraint("occurrence_count >= 1 AND notification_failures >= 0", name="ck_operational_alert_counts"),
+        Index("ix_operational_alerts_state_severity_seen", "state", "severity", "last_seen_at"),
+    )
+
+
 class AuditLog(Base):
     __tablename__ = "audit_logs"
     id: Mapped[str] = mapped_column(String(32), primary_key=True, default=new_id)

@@ -12,6 +12,7 @@ PERMISSIONS = {
     "platforms.manage": "Manage verified platform catalog settings",
     "ai.manage": "Manage AI provider system settings",
     "logs.read": "View audit logs within authorized scope",
+    "ops.view": "View real operational status and alert history",
     "profile.manage": "Manage own profile and password",
     "platform.accounts.manage": "Manage own personal platform accounts",
     "shared_accounts.read": "View shared accounts granted to the current user",

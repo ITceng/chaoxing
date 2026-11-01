@@ -1,0 +1,14 @@
+# Optional operations overlay: install the host monitor and create HOST_METRICS_FILE first.
+# This read-only, secret-free JSON snapshot grants observability only, never decryption access.
+services:
+  backend:
+    environment:
+      HOST_METRICS_PATH: /run/unified-learning/host-metrics.json
+      OPS_ALERT_COOLDOWN_SECONDS: ${OPS_ALERT_COOLDOWN_SECONDS:-1800}
+    volumes:
+      - type: bind
+        source: ${HOST_METRICS_FILE:-/var/lib/unified-learning/host-metrics.json}
+        target: /run/unified-learning/host-metrics.json
+        read_only: true
+        bind:
+          create_host_path: false

@@ -11,6 +11,7 @@ from sqlalchemy.exc import OperationalError, SQLAlchemyError, TimeoutError as SQ
 from werkzeug.middleware.proxy_fix import ProxyFix
 
 from unified_system.api.admin import bp as admin_bp
+from unified_system.api.ops import bp as ops_bp
 from unified_system.api.auth import bp as auth_bp
 from unified_system.api.catalog import bp as catalog_bp
 from unified_system.api.accounts import bp as accounts_bp
@@ -23,6 +24,7 @@ from unified_system.bootstrap import seed_catalog
 from unified_system.config import settings_from_env
 from unified_system.db import Base, close_db, get_db, init_database
 from unified_system.logging_utils import configure_json_logging
+from unified_system.operations import JsonLogNotifier, evaluate_and_persist_alerts
 from unified_system.models import AIProviderConfig, PlatformAccountSecret, Role, User, UserRole
 from unified_system.security import (
     decrypt_secret, encrypted_with_active_key, hash_password, validate_credential_keyring,
@@ -60,6 +62,7 @@ def create_app(test_config: dict | None = None) -> Flask:
     app.teardown_appcontext(close_db)
     app.register_blueprint(auth_bp)
     app.register_blueprint(admin_bp)
+    app.register_blueprint(ops_bp)
     app.register_blueprint(catalog_bp)
     app.register_blueprint(accounts_bp)
     app.register_blueprint(activity_bp)
@@ -168,6 +171,29 @@ def create_app(test_config: dict | None = None) -> Flask:
         with app.app_context():
             seed_catalog()
         click.echo("Database schema and platform catalog initialized.")
+
+    @app.cli.command("ops-check")
+    def ops_check_command():
+        """Evaluate measured host/application signals and reconcile deduplicated alerts."""
+        with app.app_context():
+            db = get_db()
+            try:
+                stats = evaluate_and_persist_alerts(
+                    db,
+                    app.config.get("HOST_METRICS_PATH", ""),
+                    JsonLogNotifier(app.logger),
+                    cooldown_seconds=int(app.config.get("OPS_ALERT_COOLDOWN_SECONDS", 1800)),
+                    worker_ttl_seconds=int(app.config.get("WORKER_HEARTBEAT_TTL_SECONDS", 90)),
+                )
+            except Exception as exc:
+                db.rollback()
+                app.logger.error("operational alert evaluation failed", extra={
+                    "event_type": "ops.evaluation.failed", "error_type": type(exc).__name__,
+                })
+                raise click.ClickException(
+                    f"Operational alert evaluation failed ({type(exc).__name__}); see sanitized service logs."
+                ) from None
+        click.echo(f"Operational alert evaluation complete: active={stats['active']}, opened={stats['opened']}, recovered={stats['recovered']}.")
 
     @app.cli.command("rotate-credential-encryption-key")
     @click.option("--apply", "apply_changes", is_flag=True, help="Re-encrypt all stored platform and AI credentials transactionally.")

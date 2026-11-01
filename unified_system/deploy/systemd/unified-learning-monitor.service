@@ -1,0 +1,25 @@
+[Unit]
+Description=Collect host health metrics and evaluate operational alerts
+Requires=docker.service
+After=docker.service
+
+[Service]
+Type=oneshot
+User=agentuser
+Group=agentuser
+SupplementaryGroups=docker
+WorkingDirectory=%h/chaoxing/unified_system
+Environment=SYSTEM_DIR=%h/chaoxing/unified_system
+Environment=DEPLOY_DIR=%h/chaoxing/unified_system/deploy
+Environment=ENV_FILE=%h/chaoxing/unified_system/deploy/.env.production
+Environment=NGINX_ENV_FILE=%h/chaoxing/unified_system/deploy/nginx/.env.nginx
+Environment=BACKUP_DIR=%h/chaoxing/unified_system/deploy/backups
+Environment=MONITOR_METRICS_FILE=/var/lib/unified-learning/host-metrics.json
+ExecStart=/usr/bin/python3 %h/chaoxing/unified_system/deploy/system-monitor.py
+UMask=0022
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=full
+ProtectHome=read-only
+ReadWritePaths=/var/lib/unified-learning
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
