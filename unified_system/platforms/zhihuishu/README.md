@@ -1,5 +1,9 @@
-# Zhihuishu adapter — pending safe extraction
+# Zhihuishu adapter — candidate, not enabled
 
-No concrete unified adapter is registered. `platforms/zhihuishu.py` is an explicit planned skeleton. The separate `fuckZHS-master` tree includes login/QR code and course reads, but also CAPTCHA/security states, Cookie debug logging and many study/quiz/exam mutation methods. Do not import it directly into the tenant Worker. A future adapter must separately implement and test official user-driven authorization and read-only course/resource/progress methods, with sensitive logging removed from the copied boundary.
+`adapter.py` is an isolated cookies-only read candidate for the two course-list shapes found in the existing `fuckZHS-master/fucker.py` and `zd_utils.py`: shared-credit (`getZhidaoList`) and campus-credit (`getHikeList`). It reproduces only the read request envelope and parses course ID/name into `CourseSummary`. It does **not** import `Fucker`, login helpers, logger, scheduler, study/progress writes, quiz/exam code, answer generation, or submission functions.
 
-See [`docs/phase4-source-audit.md`](../../../docs/phase4-source-audit.md).
+The original tree's `Fucker` constructor and request methods log cookies/headers/body data, so they are not safe to instantiate in a multi-user Worker. The adapter instead creates a fresh HTTP session per call, requires an owner-supplied `CASLOGC` cookie, uses fixed HTTPS endpoints, disables redirects, bounds each request to 2 MiB and 4/12 second connect/read timeouts, clears the cookie jar, and checks cooperative cancellation between page/request boundaries. Account and shared-grant isolation remain enforced by the existing server task/lease protocol.
+
+All capabilities remain false and `health_check()` remains unhealthy. Current coverage is offline Mock-only; no real login, authorization check, API response, course retrieval, or Linux/Ubuntu server integration has been verified. It must not be registered or advertised until user-authorized live checks and an independent review of the actual response contract pass. If any response indicates CAPTCHA/security interaction, the adapter returns `interaction_required`; it does not automate or retry around that interaction.
+
+Original source inventory: `fuckZHS-master/zhs_auth.py` (password/QR login flows requiring user/security interaction), `fucker.py` (mixed read and mutating automation), and `zd_utils.py` (AES envelope/helpers). The existing source is retained untouched.

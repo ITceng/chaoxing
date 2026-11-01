@@ -1,22 +1,26 @@
 from __future__ import annotations
 
+import threading
 import time
 from datetime import datetime, timezone
 
 import pytest
+import requests
 from sqlalchemy import select
 
 from unified_system.db import get_db
-from unified_system.models import Platform, PlatformAccount, Task
+from unified_system.models import Platform, PlatformAccount, Task, WorkerInstance
 from unified_system.platforms.chaoxing.adapter import ChaoxingAdapter
 from unified_system.platforms.chaoxing.manual_verify import check_cookie
 from unified_system.platforms.common import (
     AdapterCancelled, AdapterCapabilities, AdapterError, AdapterRegistry, AuthContext,
     CancellationToken, CourseSummary, HealthStatus, PlatformAdapter, PlatformInfo, UnsupportedCapability,
+    VerificationState,
 )
 from unified_system.tests.test_accounts_workers import create_shared, grant, post, sign_in
 from unified_system.tests.test_isolation import create_account
 from unified_system.workers.runtime import WorkerClient, WorkerEngine, WorkerSettings
+from unified_system.workers.runtime.engine import run_forever
 
 
 class FakeAdapter(PlatformAdapter):
@@ -78,13 +82,20 @@ class FakeCookieJar:
     def set(self, name, value, **kwargs):
         self.values.append((name, value, kwargs))
 
+    def clear(self):
+        self.values.clear()
+
 
 class FakeHTTPResponse:
     def __init__(self, text, status=200):
         self.status_code = status
         self.text = text
         self.content = text.encode("utf-8")
+        self.encoding = "utf-8"
         self.closed = False
+
+    def iter_content(self, chunk_size=65536):
+        yield self.content
 
     def close(self):
         self.closed = True
@@ -145,20 +156,43 @@ def test_base_adapter_explicitly_reports_unsupported_features():
 def test_chaoxing_candidate_is_unverified_and_not_dispatchable():
     adapter = ChaoxingAdapter()
     assert adapter.capabilities().worker_capabilities() == []
+    assert adapter.integration_state is VerificationState.DISABLED
     assert adapter.health_check().healthy is False
+    assert adapter.health_check().detail_code == VerificationState.PENDING_VERIFICATION.value
 
 
 def test_manual_chaoxing_check_emits_only_count_and_never_enables_capabilities():
     class RecordingAdapter:
-        def list_courses(self, auth):
+        def check_session_authorization(self, auth):
             assert auth.values["cookies"] == "manual-private-cookie"
-            return [object(), object()]
+            return [object(), object()], [200, 200]
 
     report = check_cookie(RecordingAdapter(), "manual-private-cookie")
-    assert report["result"] == "candidate_read_only_request_succeeded"
+    assert report["credential_state"] == "PENDING_VERIFICATION"
+    assert report["integration_state"] == "DISABLED"
+    assert report["result"] == "mock_or_unconfirmed_check_succeeded"
     assert report["course_count"] == 2
-    assert report["capabilities_enabled"] is False
+    assert report["http_status_codes"] == [200, 200]
     assert "manual-private-cookie" not in repr(report)
+
+
+def test_chaoxing_manual_check_distinguishes_unconfigured_expired_and_error_states():
+    empty = check_cookie(object(), "")
+    assert empty["credential_state"] == VerificationState.NOT_CONFIGURED.value
+    assert empty["integration_state"] == VerificationState.DISABLED.value
+
+    class ExpiredAdapter:
+        def check_session_authorization(self, auth):
+            raise AdapterError("authorization_required", "redacted", http_status=401)
+
+    expired = check_cookie(ExpiredAdapter(), "private-cookie", live_check=True)
+    assert expired["credential_state"] == VerificationState.EXPIRED.value
+    assert expired["http_status_codes"] == [401]
+    assert expired["integration_state"] == VerificationState.DISABLED.value
+    assert "private-cookie" not in repr(expired)
+
+    states = {state.value for state in VerificationState}
+    assert states == {"NOT_CONFIGURED", "PENDING_VERIFICATION", "VERIFIED", "EXPIRED", "ERROR", "DISABLED"}
 
 
 def test_chaoxing_candidate_uses_isolated_cookie_session_and_parses_only_course_summary():
@@ -175,11 +209,49 @@ def test_chaoxing_candidate_uses_isolated_cookie_session_and_parses_only_course_
     assert [item.course_id for item in courses] == ["c1:cl1", "c2:cl2"]
     assert courses[0].course_name == "Systems" and courses[0].teacher_name == "Teacher"
     assert courses[0].source_verified is False
-    assert session.closed
-    assert all(call[2]["allow_redirects"] is False for call in session.calls)
+    assert session.closed and session.cookies.values == []
+    assert all(call[2]["allow_redirects"] is False and call[2]["stream"] is True for call in session.calls)
     assert all(call[2]["timeout"] == (4.0, 12.0) for call in session.calls)
     assert all(call[1].startswith("https://mooc2-ans.chaoxing.com/") for call in session.calls)
     assert "user-cookie" not in repr(courses) and "user-cookie" not in repr(auth)
+
+
+def test_chaoxing_candidate_uses_a_fresh_cookie_jar_per_account():
+    observed = []
+
+    class InspectSession(FakeHTTPSession):
+        def request(self, method, url, **kwargs):
+            observed.append({name: value for name, value, _options in self.cookies.values})
+            return super().request(method, url, **kwargs)
+
+    card = '<div class="course"><input class="courseId" value="c1"><input class="clazzId" value="cl1"><span class="course-name" title="Systems">Systems</span></div>'
+    session_instances = [
+        InspectSession([FakeHTTPResponse(card), FakeHTTPResponse("<div></div>")]),
+        InspectSession([FakeHTTPResponse(card.replace("c1", "c2")), FakeHTTPResponse("<div></div>")]),
+    ]
+    sessions_to_use = list(session_instances)
+    adapter = ChaoxingAdapter(session_factory=lambda: sessions_to_use.pop(0))
+    adapter.list_courses(AuthContext("a", "cookies", {"cookies": "UID=owner-a; _uid=a"}))
+    adapter.list_courses(AuthContext("b", "cookies", {"cookies": "UID=owner-b; _uid=b"}))
+    assert observed[0]["UID"] == "owner-a" and "owner-b" not in observed[0].values()
+    assert observed[2]["UID"] == "owner-b" and "owner-a" not in observed[2].values()
+    assert all(session.closed and not session.cookies.values for session in session_instances)
+
+
+def test_chaoxing_candidate_timeout_is_structured_and_does_not_leak_exception_text():
+    class TimeoutSession(FakeHTTPSession):
+        def request(self, method, url, **kwargs):
+            raise requests.Timeout("private-cookie in synthetic exception")
+
+    session = TimeoutSession([])
+    adapter = ChaoxingAdapter(session_factory=lambda: session)
+    auth = AuthContext("account-1", "cookies", {"cookies": "UID=private-cookie"})
+    with pytest.raises(AdapterError) as error:
+        adapter.check_session_authorization(auth)
+    assert error.value.code == "network_timeout"
+    assert error.value.retryable is True
+    assert "private-cookie" not in repr(error.value)
+    assert session.closed and session.cookies.values == []
 
 
 def test_chaoxing_candidate_rejects_redirects_and_never_exposes_cookie_values():
@@ -238,23 +310,50 @@ def test_worker_settings_redact_token_and_reject_insecure_remote_url():
 
 
 def test_worker_client_uses_private_worker_headers_without_cookie_auth():
-    captured = {}
+    captured = []
 
     class Response:
         status_code = 200
         content = b'{"ok":true}'
+        closed = False
         def json(self): return {"ok": True}
+        def close(self): self.closed = True
 
+    response = Response()
     def request(method, url, **kwargs):
-        captured.update(method=method, url=url, **kwargs)
-        return Response()
+        captured.append({"method": method, "url": url, **kwargs})
+        return response
 
     client = WorkerClient(worker_settings(), request=request)
     client.heartbeat(["course_list"])
-    assert captured["url"] == "http://backend:8088/api/internal/workers/heartbeat"
-    assert captured["headers"]["X-Worker-Token"] == worker_settings().token
-    assert "Cookie" not in captured["headers"] and "Authorization" not in captured["headers"]
-    assert captured["timeout"] == 2
+    client.shutdown()
+    assert captured[0]["url"] == "http://backend:8088/api/internal/workers/heartbeat"
+    assert captured[1]["url"] == "http://backend:8088/api/internal/workers/shutdown"
+    assert captured[0]["headers"]["X-Worker-Token"] == worker_settings().token
+    assert "Cookie" not in captured[0]["headers"] and "Authorization" not in captured[0]["headers"]
+    assert captured[0]["timeout"] == 2
+    assert response.closed is True
+
+
+def test_worker_authentication_can_bind_token_to_worker_identity_without_breaking_legacy_mode(client, app):
+    platform_token = "legacy-platform-token-long-enough-123456"
+    worker_token = "bound-worker-specific-token-long-123456"
+    app.config["WORKER_TOKENS"] = {
+        "chaoxing": platform_token,
+        "chaoxing:bound-worker": worker_token,
+    }
+    endpoint = "/api/internal/workers/heartbeat"
+    wrong_token = client.post(endpoint, json={"capabilities": []}, headers={
+        "X-Worker-Platform": "chaoxing", "X-Worker-ID": "bound-worker", "X-Worker-Token": platform_token,
+    })
+    wrong_identity = client.post(endpoint, json={"capabilities": []}, headers={
+        "X-Worker-Platform": "chaoxing", "X-Worker-ID": "other-worker", "X-Worker-Token": platform_token,
+    })
+    accepted = client.post(endpoint, json={"capabilities": []}, headers={
+        "X-Worker-Platform": "chaoxing", "X-Worker-ID": "bound-worker", "X-Worker-Token": worker_token,
+    })
+    assert wrong_token.status_code == wrong_identity.status_code == 401
+    assert accepted.status_code == 200
 
 
 def test_worker_engine_completes_only_read_only_task_with_compact_summary():
@@ -269,6 +368,45 @@ def test_worker_engine_completes_only_read_only_task_with_compact_summary():
     assert completion[3] == {"operation": "course_list", "item_count": 1, "read_only": True}
     assert completion[4] == [{"course_id": "c-1", "course_name": "Course One", "teacher_name": "", "semester": "", "resource_status": "UNKNOWN"}]
     assert "secret-session-value" not in repr(client.calls)
+    assert client.task_envelope["credential"]["values"] == {}
+    assert client.task_envelope["task"]["lease_token"] == ""
+
+
+def test_worker_engine_maps_session_rejection_to_expired_account_state_for_course_reads():
+    class ExpiredAdapter(FakeAdapter):
+        def list_courses(self, auth):
+            raise AdapterError("authorization_required", "private session info")
+
+    envelope = task_envelope("course_list")
+    client = FakeClient(worker_settings(), envelope)
+    engine = WorkerEngine(client, ExpiredAdapter())
+    engine.run_once()
+    completion = next(call for call in client.calls if call[0] == "complete")
+    assert completion[1:3] == ("failed", "authorization_expired")
+    assert envelope["credential"]["values"] == {}
+    assert "private session info" not in repr(client.calls)
+
+
+def test_worker_engine_maps_session_rejection_to_expired_account_state():
+    class ExpiredAdapter(FakeAdapter):
+        def capabilities(self):
+            return AdapterCapabilities(
+                credential_validation=True,
+                supported_task_kinds=("account_validate",),
+                verified_at=datetime.now(timezone.utc),
+            )
+
+        def validate_credentials(self, auth):
+            raise AdapterError("authorization_required", "private session info")
+
+    envelope = task_envelope("account_validate")
+    client = FakeClient(worker_settings(), envelope)
+    engine = WorkerEngine(client, ExpiredAdapter())
+    engine.run_once()
+    completion = next(call for call in client.calls if call[0] == "complete")
+    assert completion[1:3] == ("failed", "authorization_expired")
+    assert envelope["credential"]["values"] == {}
+    assert "private session info" not in repr(client.calls)
 
 
 def test_worker_engine_fails_closed_on_unhealthy_adapter_before_heartbeat_or_claim():
@@ -307,6 +445,46 @@ def test_worker_engine_asks_adapter_to_stop_when_backend_requests_cancel():
     engine.run_once()
     completion = next(call for call in client.calls if call[0] == "complete")
     assert completion[1] == "cancelled"
+
+
+def test_worker_stops_after_uncooperative_adapter_exceeds_cancel_grace_and_clears_credentials():
+    release = threading.Event()
+
+    class StubbornAdapter(FakeAdapter):
+        def execute_read_only(self, kind, request_data, auth, cancellation):
+            release.wait(timeout=1.0)
+            return []
+
+    envelope = task_envelope()
+    client = FakeClient(worker_settings(cancellation_grace_seconds=0.02), envelope, cancel=True)
+    engine = WorkerEngine(client, StubbornAdapter())
+    engine.run_once()
+    assert engine.stop_event.is_set()
+    assert envelope["credential"]["values"] == {}
+    release.set()
+
+
+def test_worker_shutdown_marks_offline_and_releases_adapter_resources():
+    class ClosingAdapter(FakeAdapter):
+        def __init__(self):
+            super().__init__()
+            self.closed = False
+
+        def close(self):
+            self.closed = True
+
+    class ShutdownClient(FakeClient):
+        def shutdown(self):
+            self.calls.append(("shutdown",))
+
+    adapter = ClosingAdapter()
+    client = ShutdownClient(worker_settings(), None)
+    stop_event = threading.Event()
+    stop_event.set()
+    engine = WorkerEngine(client, adapter, stop_event=stop_event)
+    run_forever(engine)
+    assert ("shutdown",) in client.calls
+    assert adapter.closed is True
 
 
 def test_backend_only_accepts_read_only_tasks_and_claims_only_advertised_kind(client, app):
@@ -367,6 +545,10 @@ def test_backend_only_accepts_read_only_tasks_and_claims_only_advertised_kind(cl
     )
     assert revoked.status_code == 200
     assert user.get("/api/v1/courses").get_json()["courses"] == []
+    assert worker.post("/api/internal/workers/shutdown", json={}, headers=headers).status_code == 200
+    with app.app_context():
+        worker_row = get_db().scalar(select(WorkerInstance).where(WorkerInstance.worker_id == "phase4-capability-worker"))
+        assert worker_row.status == "offline" and worker_row.capabilities == []
 
 
 def test_personal_account_verification_requires_catalog_capability_and_records_only_result(client, app):
@@ -428,6 +610,24 @@ def test_personal_account_verification_requires_catalog_capability_and_records_o
     assert rejected.status_code == 200
     account = client.get("/api/v1/platform-accounts").get_json()["personal_accounts"][0]
     assert account["status"] == "error" and account["verified_at"] is None
+
+    reauthorized = post(client, f"/api/v1/personal-accounts/{account_id}/reauthorize", {
+        "auth_type":"cookies", "credentials":{"cookies":"third-mock-cookie"},
+    }, csrf)
+    assert reauthorized.status_code == 200
+    queued_expiry = post(client, f"/api/v1/personal-accounts/{account_id}/verify", {}, csrf)
+    assert queued_expiry.status_code == 202
+    assert worker.post("/api/internal/workers/heartbeat", json={"capabilities":["account_validate"]}, headers=headers).status_code == 200
+    expiry_envelope = worker.post("/api/internal/workers/claim", json={}, headers=headers).get_json()
+    expiry_task = expiry_envelope["task"]
+    expiry_lease = expiry_task["lease_token"]
+    assert worker.post(f"/api/internal/workers/{expiry_task['id']}/start", json={"lease_token":expiry_lease}, headers=headers).status_code == 200
+    expired = worker.post(f"/api/internal/workers/{expiry_task['id']}/complete", json={
+        "lease_token":expiry_lease, "outcome":"failed", "error_code":"authorization_expired",
+    }, headers=headers)
+    assert expired.status_code == 200
+    account = client.get("/api/v1/platform-accounts").get_json()["personal_accounts"][0]
+    assert account["status"] == "expired" and account["verified_at"] is None
 
 
 def test_shared_account_owner_can_validate_while_private_account_is_closed(client, app):

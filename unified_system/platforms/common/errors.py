@@ -9,13 +9,16 @@ _CODE_RE = re.compile(r"^[a-z][a-z0-9_]{1,63}$")
 class AdapterError(RuntimeError):
     """Safe, typed adapter failure. Never put credentials or raw responses in `message`."""
 
-    def __init__(self, code: str, message: str, *, retryable: bool = False):
+    def __init__(self, code: str, message: str, *, retryable: bool = False, http_status: int | None = None, business_code: str | int | None = None):
         if not _CODE_RE.fullmatch(code):
             raise ValueError("adapter error code must be a short lowercase identifier")
         super().__init__(message)
         self.code = code
         self.message = message
         self.retryable = retryable
+        self.http_status = http_status
+        self.http_statuses: tuple[int, ...] = (http_status,) if http_status is not None else ()
+        self.business_code = business_code
 
     def __str__(self) -> str:
         return self.message

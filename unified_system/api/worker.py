@@ -36,10 +36,16 @@ def _authorize_worker():
     platform_key = request.headers.get("X-Worker-Platform", "").strip()
     worker_id = request.headers.get("X-Worker-ID", "").strip()
     token = request.headers.get("X-Worker-Token", "")
-    expected = current_app.config.get("WORKER_TOKENS", {}).get(platform_key, "")
-    if not expected:
+    worker_tokens = current_app.config.get("WORKER_TOKENS", {})
+    worker_specific_key = f"{platform_key}:{worker_id}" if worker_id else ""
+    has_worker_specific_tokens = any(
+        isinstance(key, str) and key.startswith(platform_key + ":") for key in worker_tokens
+    ) if platform_key else False
+    platform_token = worker_tokens.get(platform_key, "")
+    expected = worker_tokens.get(worker_specific_key, "") if has_worker_specific_tokens else platform_token
+    if not platform_token and not has_worker_specific_tokens:
         return None, None, None, (json_error("Worker channel is not configured", 503))
-    if not worker_id or len(worker_id) > 120 or not token or not hmac.compare_digest(expected, token):
+    if not worker_id or len(worker_id) > 120 or not expected or not token or not hmac.compare_digest(expected, token):
         return None, None, None, json_error("Worker authentication failed", 401)
     platform = db.scalar(select(Platform).where(Platform.key == platform_key))
     if not platform:
@@ -156,6 +162,19 @@ def heartbeat(db, platform, worker_id):
     worker.last_seen_at = utcnow()
     db.commit()
     return jsonify({"ok": True, "server_time": iso_utc(utcnow()), "platform_status": platform.integration_status})
+
+
+@bp.post("/shutdown")
+@_worker_route
+def worker_shutdown(db, platform, worker_id):
+    worker = db.scalar(select(WorkerInstance).where(WorkerInstance.worker_id == worker_id).with_for_update())
+    if not worker or worker.platform_id != platform.id:
+        return json_error("Worker is not registered for this platform", 404)
+    worker.status = "offline"
+    worker.capabilities = []
+    worker.last_seen_at = utcnow()
+    db.commit()
+    return jsonify({"ok": True, "status": "offline"})
 
 
 @bp.post("/claim")
@@ -483,13 +502,17 @@ def complete_task(db, platform, worker_id, task_id):
     synced_course_count = 0
     if outcome == "succeeded" and course_catalog is not None:
         synced_course_count = _store_course_catalog(db, task, course_catalog, now)
-    if task.kind == "account_validate" and (task.personal_account_id or task.shared_account_id):
+    if task.personal_account_id or task.shared_account_id:
         verified_account = db.get(PlatformAccount, task.personal_account_id or task.shared_account_id)
-        if verified_account and outcome == "succeeded":
+        if task.kind == "account_validate" and verified_account and outcome == "succeeded":
             verified_account.status = "active"
             verified_account.verified_at = now
             verified_account.updated_at = now
-        elif verified_account and outcome == "failed" and body.get("error_code") == "authorization_failed":
+        elif verified_account and outcome == "failed" and body.get("error_code") == "authorization_expired":
+            verified_account.status = "expired"
+            verified_account.verified_at = None
+            verified_account.updated_at = now
+        elif task.kind == "account_validate" and verified_account and outcome == "failed" and body.get("error_code") == "authorization_failed":
             verified_account.status = "error"
             verified_account.verified_at = None
             verified_account.updated_at = now

@@ -5,10 +5,11 @@ from unified_system.platforms.common.models import (
     LearningProgress, LearningResource, PlatformInfo, WorkerTask,
 )
 from unified_system.platforms.common.registry import AdapterRegistry
+from unified_system.platforms.common.verification import VerificationState
 
 __all__ = [
     "AdapterCancelled", "AdapterCapabilities", "AdapterError", "AdapterRegistry",
     "AuthContext", "CancellationToken", "CourseDetails", "CourseSummary", "HealthStatus",
     "LearningProgress", "LearningResource", "PlatformAdapter", "PlatformInfo",
-    "UnsupportedCapability", "WorkerTask",
+    "UnsupportedCapability", "VerificationState", "WorkerTask",
 ]

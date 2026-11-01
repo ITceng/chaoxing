@@ -50,6 +50,10 @@ class PlatformAdapter(ABC):
     def health_check(self) -> HealthStatus:
         raise UnsupportedCapability("health_check")
 
+    def close(self) -> None:
+        """Release adapter-owned resources during Worker shutdown; adapters may override."""
+        return None
+
     def execute_read_only(self, kind: str, request_data: Mapping[str, Any], auth: AuthContext, cancellation) -> Any:
         """Dispatch an explicit allowlist; arbitrary task kinds are never executed."""
         cancellation.checkpoint()

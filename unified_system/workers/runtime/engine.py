@@ -41,6 +41,18 @@ class WorkerEngine:
         return True
 
     def _execute(self, envelope: dict) -> None:
+        try:
+            self._execute_task(envelope)
+        finally:
+            credential = envelope.get("credential") if isinstance(envelope, dict) else None
+            values = credential.get("values") if isinstance(credential, dict) else None
+            if isinstance(values, dict):
+                values.clear()
+            task = envelope.get("task") if isinstance(envelope, dict) else None
+            if isinstance(task, dict):
+                task["lease_token"] = ""
+
+    def _execute_task(self, envelope: dict) -> None:
         task = envelope["task"]
         credential = envelope["credential"]
         task_id = task["id"]
@@ -95,12 +107,14 @@ class WorkerEngine:
                         cancel_at = cancel_at or now
                 except WorkerProtocolError:
                     cancellation.cancel()
-                    logger.warning("task lease heartbeat failed; allowing lease to expire")
+                    self.stop_event.set()
+                    logger.warning("task lease heartbeat failed; worker will stop to avoid overlapping execution")
                     return
                 last_heartbeat = now
             thread.join(timeout=min(0.25, self.client.settings.heartbeat_interval_seconds))
             if cancel_at is not None and time.monotonic() - cancel_at >= self.client.settings.cancellation_grace_seconds:
-                logger.warning("adapter did not stop within cancellation grace; lease will expire")
+                self.stop_event.set()
+                logger.warning("adapter did not stop within cancellation grace; worker will exit and lease will expire")
                 return
 
         ok, value = result_queue.get_nowait()
@@ -109,6 +123,8 @@ class WorkerEngine:
             return
         if not ok:
             code = value.code if isinstance(value, AdapterError) else "adapter_error"
+            if code in {"authorization_required", "session_expired"}:
+                code = "authorization_expired"
             if isinstance(value, AdapterCancelled):
                 code = "cancelled"
                 self.client.complete_task(task_id, lease_token, "cancelled", error_code=code, result_summary={})
@@ -172,17 +188,34 @@ def _result_summary(kind: str, result: Any) -> dict[str, Any]:
 
 def run_forever(engine: WorkerEngine) -> None:
     logger.info("worker starting platform=%s id=%s capabilities=%s", engine.info.key, engine.client.settings.worker_id, sorted(engine.task_kinds))
-    while not engine.stop_event.is_set():
-        try:
-            claimed = engine.run_once()
-        except WorkerProtocolError as exc:
-            logger.warning("worker protocol failure code=%s status=%s", exc.code, exc.status)
-            engine.stop_event.wait(engine.client.settings.poll_interval_seconds)
-            continue
-        except Exception as exc:  # no str(exc): third-party responses may contain credentials
-            logger.error("worker loop error type=%s", type(exc).__name__)
-            engine.stop_event.wait(engine.client.settings.poll_interval_seconds)
-            continue
-        if not claimed:
-            engine.stop_event.wait(engine.client.settings.poll_interval_seconds)
-    logger.info("worker stopping platform=%s id=%s", engine.info.key, engine.client.settings.worker_id)
+    try:
+        while not engine.stop_event.is_set():
+            try:
+                claimed = engine.run_once()
+            except WorkerProtocolError as exc:
+                logger.warning("worker protocol failure code=%s status=%s", exc.code, exc.status)
+                engine.stop_event.wait(engine.client.settings.poll_interval_seconds)
+                continue
+            except Exception as exc:  # no str(exc): third-party responses may contain credentials
+                logger.error("worker loop error type=%s", type(exc).__name__)
+                engine.stop_event.wait(engine.client.settings.poll_interval_seconds)
+                continue
+            if not claimed:
+                engine.stop_event.wait(engine.client.settings.poll_interval_seconds)
+    finally:
+        engine.stop_event.set()
+        shutdown = getattr(engine.client, "shutdown", None)
+        if callable(shutdown):
+            try:
+                shutdown()
+            except WorkerProtocolError as exc:
+                logger.warning("worker offline notification failed code=%s status=%s", exc.code, exc.status)
+            except Exception as exc:
+                logger.warning("worker offline notification failed type=%s", type(exc).__name__)
+        close = getattr(engine.adapter, "close", None)
+        if callable(close):
+            try:
+                close()
+            except Exception as exc:
+                logger.warning("adapter shutdown cleanup failed type=%s", type(exc).__name__)
+        logger.info("worker stopping platform=%s id=%s", engine.info.key, engine.client.settings.worker_id)

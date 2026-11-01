@@ -42,29 +42,38 @@ class WorkerClient:
         except requests.RequestException as exc:
             # Request exceptions can embed URLs; expose only a stable code.
             raise WorkerProtocolError("worker_api_unreachable") from exc
-        status = int(response.status_code)
-        if status in allow_status:
-            payload = {}
-            if response.content:
-                try:
-                    payload = response.json()
-                except (ValueError, requests.JSONDecodeError):
-                    raise WorkerProtocolError("worker_api_invalid_json", status)
-            return status, payload
-        if not 200 <= status < 300:
-            raise WorkerProtocolError("worker_api_rejected", status)
-        if status == 204 or not response.content:
-            return status, {}
         try:
-            payload = response.json()
-        except (ValueError, requests.JSONDecodeError) as exc:
-            raise WorkerProtocolError("worker_api_invalid_json", status) from exc
-        if not isinstance(payload, dict):
-            raise WorkerProtocolError("worker_api_invalid_shape", status)
-        return status, payload
+            status = int(response.status_code)
+            if status in allow_status:
+                payload = {}
+                if response.content:
+                    try:
+                        payload = response.json()
+                    except (ValueError, requests.JSONDecodeError):
+                        raise WorkerProtocolError("worker_api_invalid_json", status)
+                return status, payload
+            if not 200 <= status < 300:
+                raise WorkerProtocolError("worker_api_rejected", status)
+            if status == 204 or not response.content:
+                return status, {}
+            try:
+                payload = response.json()
+            except (ValueError, requests.JSONDecodeError) as exc:
+                raise WorkerProtocolError("worker_api_invalid_json", status) from exc
+            if not isinstance(payload, dict):
+                raise WorkerProtocolError("worker_api_invalid_shape", status)
+            return status, payload
+        finally:
+            close = getattr(response, "close", None)
+            if callable(close):
+                close()
 
     def heartbeat(self, capabilities: list[str]) -> dict:
         _, payload = self._call("POST", "heartbeat", {"version": self.settings.version, "capabilities": capabilities})
+        return payload
+
+    def shutdown(self) -> dict:
+        _, payload = self._call("POST", "shutdown", {})
         return payload
 
     def claim(self) -> dict | None:
