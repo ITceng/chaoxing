@@ -26,6 +26,7 @@ const router = createRouter({
         { path: 'admin/shared-accounts', name: 'admin-shared', component: () => import('../views/SharedAdminView.vue'), meta: { title: '共享账号管理', permission: 'shared_accounts.manage' } },
         { path: 'admin/audit', name: 'admin-audit', component: () => import('../views/AuditLogsView.vue'), meta: { title: '审计日志', permission: 'logs.read' } },
         { path: 'admin/workers', name: 'admin-workers', component: () => import('../views/WorkersView.vue'), meta: { title: '平台与 Worker', permission: 'platforms.manage' } },
+        { path: 'admin/ops', name: 'admin-ops', component: () => import('../views/OpsDashboardView.vue'), meta: { title: '运维监控', permission: 'ops.view' } },
       ],
     },
     { path: '/:pathMatch(.*)*', name: 'not-found', component: () => import('../views/NotFoundView.vue'), meta: { title: '页面不存在' } },

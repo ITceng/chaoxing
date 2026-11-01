@@ -97,6 +97,46 @@ export interface AdminSummary {
   recent_operations: { id: string; actor_user_id: string | null; target_user_id: string | null; action: string; entity_type: string; entity_id: string; created_at: string }[]
 }
 
+export interface OperationalAlert {
+  id: string
+  code: string
+  severity: 'INFO' | 'WARNING' | 'ERROR' | 'CRITICAL'
+  state: 'active' | 'resolved'
+  title: string
+  details: Record<string, string | number | boolean | null>
+  first_seen_at: string | null
+  last_seen_at: string | null
+  last_notified_at: string | null
+  resolved_at: string | null
+  occurrence_count: number
+  notification_failures: number
+}
+
+export interface OpsOverview {
+  generated_at: string
+  monitor: { ops_check_state: string; ops_check_at: string | null }
+  host: {
+    state: string; captured_at: string | null; age_seconds: number | null
+    cpu_percent: number | null; memory_percent: number | null; load_1m: number | null
+    root_disk: { total_bytes: number | null; free_bytes: number | null; used_percent: number | null }
+    backup_disk: { total_bytes: number | null; free_bytes: number | null; used_percent: number | null }
+  }
+  services: Record<string, { state: string; instances: number | null; resources: { cpu_percent: number | null; memory_used_bytes: number | null; memory_limit_bytes: number | null; memory_percent: number | null; pids_total: number | null } }>
+  readiness: { state: string; http_status: number | null; latency_ms: number | null }
+  backup: { state: string; latest_at: string | null; archive_bytes: number | null; age_seconds: number | null; retained_count: number | null; service_state: string; service_exit_status: number | null; service_finished_at: string | null }
+  certificate: { state: string; days_remaining: number | null }
+  tasks: { statuses: Record<string, number>; queued: number; oldest_queued_minutes: number | null; failed_last_15m: number }
+  workers: {
+    state: string; total: number; online: number; offline: number; active_platforms_without_worker: number
+    platforms: { key: string; name: string; integration_status: string; worker_count: number; online_workers: number; state: string; last_heartbeat_at: string | null }[]
+  }
+  ai_usage: {
+    state: string; enabled_providers: number; records_last_24h: number
+    input_tokens_last_24h: number | null; output_tokens_last_24h: number | null; failures_last_10m: number
+  }
+  alerts: { active: OperationalAlert[]; recently_resolved: OperationalAlert[] }
+}
+
 export interface ApiErrorBody {
   error?: { message?: string; status?: number }
 }

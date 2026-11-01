@@ -28,6 +28,7 @@ const adminNav = computed(() => [
   { path: '/app/admin/shared-accounts', label: '共享账号管理', icon: Lock, permission: 'shared_accounts.manage' },
   { path: '/app/admin/audit', label: '审计日志', icon: Files, permission: 'logs.read' },
   { path: '/app/admin/workers', label: '平台与 Worker', icon: Monitor, permission: 'platforms.manage' },
+  { path: '/app/admin/ops', label: '运维监控', icon: Monitor, permission: 'ops.view' },
 ].filter(item => auth.can(item.permission)))
 const roleLabel = computed(() => auth.roles.includes('superadmin') ? '超级管理员' : auth.roles.includes('admin') ? '管理员' : '普通用户')
 const pageTitle = computed(() => String(route.meta.title || '工作台'))
