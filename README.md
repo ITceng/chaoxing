@@ -18,6 +18,10 @@
 
 :star: 觉得有帮助的朋友可以给个Star
 
+## 统一多平台管理系统（Windows 本机）
+
+本仓库另有独立的 `unified_system/` 多平台管理界面。Windows 单机运行方式及双击启动/停止脚本见 [`docs/local-windows-runbook.md`](docs/local-windows-runbook.md)。该入口运行的是统一系统，不是本 README 下方的旧版 `main.py`/控制面板。平台 Worker 当前保持禁用；不要据此认定已有三个平台的自动学习/进度写入功能。
+
 ## :point_up: 更新通知
 20241021更新通知： 感谢[sz134055](https://github.com/sz134055)提交代码[PR #360](https://github.com/Samueli924/chaoxing/pull/360)，**添加了对题库答题的支持**  
 

@@ -1,0 +1,5 @@
+/scripts/windows/*.bat text eol=crlf
+/启动项目.bat text eol=crlf
+/停止项目.bat text eol=crlf
+/查看运行状态.bat text eol=crlf
+/检查本机环境.bat text eol=crlf

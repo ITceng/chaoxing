@@ -3,5 +3,7 @@ __pycache__/
 .venv/
 .env
 /data/
+/data/windows-runtime/
+/data/backups/
 *.sqlite3
 *.db

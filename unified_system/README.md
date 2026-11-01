@@ -4,7 +4,9 @@ This is the isolated unified backend and web console. It does not import legacy 
 
 ## Local development
 
-Start the backend in one terminal:
+For the supported single-user Windows-native workflow (PostgreSQL service, one-time venv/npm preparation, safe local config, Alembic initialization, and root-level double-click BAT files), see [`docs/local-windows-runbook.md`](../docs/local-windows-runbook.md). It binds the combined frontend/backend to `127.0.0.1:8088`; Worker profiles remain disabled and it is not a production deployment.
+
+Start the backend in one terminal (Linux/macOS development reference): this example uses SQLite only for disposable local development and is not the supported Windows single-user deployment. The Windows launcher explicitly requires PostgreSQL.
 
 ```bash
 cd /home/user/chaoxing
@@ -17,7 +19,7 @@ export APP_SECRET_KEY='replace-with-a-long-random-development-secret'
 flask --app unified_system.app:create_app init-db
 BOOTSTRAP_ADMIN_EMAIL=admin@example.test BOOTSTRAP_ADMIN_PASSWORD='a-long-local-password' \
   flask --app unified_system.app:create_app bootstrap-admin
-flask --app unified_system.app:create_app run --host 0.0.0.0 --port 8088
+flask --app unified_system.app:create_app run --host 127.0.0.1 --port 8088
 ```
 
 Start the Vue console in a second terminal:
@@ -25,10 +27,10 @@ Start the Vue console in a second terminal:
 ```bash
 cd /home/user/chaoxing/unified_system/frontend
 npm ci
-npm run dev
+npm run dev -- --host 127.0.0.1
 ```
 
-Vite listens on `0.0.0.0:5173`. Browser requests use the relative `/api/v1` path; Vite proxies those requests to `VITE_API_PROXY_TARGET` (default `http://127.0.0.1:8088`). No browser JavaScript calls localhost, and session cookies remain same-origin from the browser's perspective. To use a different backend, set `VITE_API_PROXY_TARGET` in an untracked `.env.local` file. Do not put secrets in Vite `VITE_*` variables.
+Vite listens on `127.0.0.1:5173` for this local development command. Browser requests use the relative `/api/v1` path; Vite proxies those requests to `VITE_API_PROXY_TARGET` (default `http://127.0.0.1:8088`). No browser JavaScript calls localhost, and session cookies remain same-origin from the browser's perspective. To use a different backend, set `VITE_API_PROXY_TARGET` in an untracked `.env.local` file. Do not put secrets in Vite `VITE_*` variables.
 
 ### Optional Docker development stack
 
@@ -38,19 +40,9 @@ Vite listens on `0.0.0.0:5173`. Browser requests use the relative `/api/v1` path
 
 `docker-compose.prod.yml`, production Dockerfiles, Postgres role initialization, host Nginx templates, backup/restore scripts, and a server preflight are documented in [`docs/phase6a-deployment.md`](../docs/phase6a-deployment.md). Phase 6B build-context corrections, internal per-platform networks, egress design and explicit validation commands are in [`docs/phase6b-container-validation.md`](../docs/phase6b-container-validation.md). Phase 6C's staged host-Nginx/HTTPS templates, certificate lifecycle, response headers, and security/test boundaries are in [`docs/phase6c-nginx-https-security.md`](../docs/phase6c-nginx-https-security.md). The Compose edge port is bound to loopback only; Worker profiles remain disabled, and no egress gateway is configured. This environment has no Docker/Compose, PostgreSQL or Nginx runtime, so no production image/container, PostgreSQL integration or Nginx validation has been completed. No target server, DNS, firewall or certificate was changed; do not expose the stack publicly until those checks, key rotation and explicit authorization are complete.
 
-Windows PowerShell (first-time administrator bootstrap):
+### Windows native local deployment
 
-```powershell
-Set-Location C:\path\to\chaoxing\unified_system
-$env:BOOTSTRAP_ADMIN_EMAIL = Read-Host 'Bootstrap email'
-$secure = Read-Host 'Bootstrap password' -AsSecureString
-$env:BOOTSTRAP_ADMIN_PASSWORD = [System.Net.NetworkCredential]::new('', $secure).Password
-docker compose -f .\docker-compose.dev.yml up --build -d
-docker compose -f .\docker-compose.dev.yml exec -e "BOOTSTRAP_ADMIN_EMAIL=$env:BOOTSTRAP_ADMIN_EMAIL" -e "BOOTSTRAP_ADMIN_PASSWORD=$env:BOOTSTRAP_ADMIN_PASSWORD" backend flask --app unified_system.app:create_app bootstrap-admin
-Remove-Item Env:BOOTSTRAP_ADMIN_EMAIL, Env:BOOTSTRAP_ADMIN_PASSWORD
-```
-
-The bootstrap password is only passed to the one-off CLI container command; do not save it in a tracked file.
+Use the root-level `启动项目.bat`, `停止项目.bat`, and `查看运行状态.bat` after following [`docs/local-windows-runbook.md`](../docs/local-windows-runbook.md). This workflow uses an installed local PostgreSQL Windows service and does not use Docker. The optional `docker-compose.dev.yml` below remains only for developers who explicitly choose Docker; it is not the documented Windows local deployment.
 
 For local single-origin serving, run `npm run build` first. Flask serves `frontend/dist` and its history-mode routes when the build exists; it falls back to the legacy static shell only when no build exists.
 
