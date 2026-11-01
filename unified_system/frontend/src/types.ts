@@ -44,6 +44,7 @@ export interface Account {
   account_mode: 'personal' | 'shared'
   created_at: string
   updated_at?: string
+  verified_at?: string | null
   platform_last_verified_at?: string | null
   available?: boolean
   grant_id?: string

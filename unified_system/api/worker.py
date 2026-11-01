@@ -76,7 +76,9 @@ def _task_is_eligible(db, task):
     account_id, base, platform, shared, user = _account_details(db, task)
     if not base or not platform or not user or user.status != "active":
         return False, "owner_or_account_unavailable", None
-    if platform.integration_status != "active" or base.status != "active":
+    if platform.integration_status != "active":
+        return False, "platform_or_account_not_active", None
+    if base.status != "active" and not (task.kind == "account_validate" and base.status in {"unverified", "error"}):
         return False, "platform_or_account_not_active", None
     if task.personal_account_id:
         personal = db.get(PersonalPlatformAccount, account_id)
@@ -86,11 +88,18 @@ def _task_is_eligible(db, task):
         grant = db.get(AccountAccessGrant, task.access_grant_id)
         if not shared or not grant or grant.user_id != task.user_id or grant.shared_account_id != account_id:
             return False, "shared_grant_missing", None
-        if not shared.is_open or grant.revoked_at or grant.valid_from > now or (grant.expires_at and grant.expires_at <= now):
+        owner_validation = (
+            task.kind == "account_validate"
+            and grant.granted_by == task.user_id
+            and shared.created_by == task.user_id
+        )
+        if (grant.revoked_at or grant.valid_from > now or (grant.expires_at and grant.expires_at <= now)):
             return False, "shared_access_revoked_or_expired", None
-        if shared.expires_at and shared.expires_at <= now:
+        if not owner_validation and not shared.is_open:
+            return False, "shared_access_revoked_or_expired", None
+        if not owner_validation and shared.expires_at and shared.expires_at <= now:
             return False, "shared_account_expired", None
-        if shared.available_from and shared.available_from > now:
+        if not owner_validation and shared.available_from and shared.available_from > now:
             return False, "shared_account_not_yet_available", None
         allowed = (grant.scope or {}).get("task_kinds", [])
         if allowed and task.kind not in allowed:
@@ -448,6 +457,10 @@ def complete_task(db, platform, worker_id, task_id):
         return json_error("result_summary must be an object no larger than 4 KiB", 400)
     if _has_sensitive_key(summary):
         return json_error("Sensitive values must not be included in result_summary", 400)
+    if task.kind == "account_validate" and outcome == "succeeded" and summary != {
+        "operation": "account_validate", "authorized": True, "read_only": True,
+    }:
+        return json_error("Account verification requires a positive, minimal authorization result", 400)
     has_course_catalog = "course_catalog" in body
     course_catalog = None
     if has_course_catalog:
@@ -470,6 +483,16 @@ def complete_task(db, platform, worker_id, task_id):
     synced_course_count = 0
     if outcome == "succeeded" and course_catalog is not None:
         synced_course_count = _store_course_catalog(db, task, course_catalog, now)
+    if task.kind == "account_validate" and (task.personal_account_id or task.shared_account_id):
+        verified_account = db.get(PlatformAccount, task.personal_account_id or task.shared_account_id)
+        if verified_account and outcome == "succeeded":
+            verified_account.status = "active"
+            verified_account.verified_at = now
+            verified_account.updated_at = now
+        elif verified_account and outcome == "failed" and body.get("error_code") == "authorization_failed":
+            verified_account.status = "error"
+            verified_account.verified_at = None
+            verified_account.updated_at = now
     task.status = outcome
     task.result_summary = summary if outcome == "succeeded" else {}
     task.finished_at = now

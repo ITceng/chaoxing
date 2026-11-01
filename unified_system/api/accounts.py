@@ -10,10 +10,10 @@ from unified_system.api.common import permission_required
 from unified_system.db import get_db
 from unified_system.models import (
     AccountAccessGrant, AuditLog, PersonalPlatformAccount, Platform, PlatformAccount,
-    PlatformAccountSecret, SharedPlatformAccount, utcnow,
+    PlatformAccountSecret, SharedPlatformAccount, Task, utcnow,
 )
 from unified_system.security import encrypt_secret, iso_utc, json_error, mask_account_hint
-from unified_system.services.tasks import cancel_account_tasks
+from unified_system.services.tasks import add_task_event, add_usage_event, cancel_account_tasks
 
 bp = Blueprint("accounts_api", __name__, url_prefix="/api/v1")
 
@@ -58,6 +58,7 @@ def _base_account(account: PlatformAccount, platform: Platform, mode: str, hint:
         "label": account.label, "account_hint": hint, "status": account.status,
         "account_mode": mode, "created_at": iso_utc(account.created_at),
         "updated_at": iso_utc(account.updated_at),
+        "verified_at": iso_utc(account.verified_at),
         "platform_last_verified_at": iso_utc(platform.last_verified_at), **extra,
     }
 
@@ -195,14 +196,68 @@ def reauthorize_personal_account(account_id: str):
     platform = db.get(Platform, account.platform_id)
     if platform.auth_methods and auth_type not in platform.auth_methods:
         return json_error("Authentication method is not listed for this platform", 400)
+    cancel_account_tasks(db, account_id, "credential_rotated", user_id=g.current_user.id)
     _new_secret(db, account_id, g.current_user.id, auth_type, serialized)
     account.status = "unverified"
+    account.verified_at = None
     account.updated_at = utcnow()
     db.add(AuditLog(actor_user_id=g.current_user.id, target_user_id=g.current_user.id,
                     action="personal_account.reauthorized", entity_type="platform_account", entity_id=account_id,
                     metadata_json={"auth_type": auth_type}))
     db.commit()
     return jsonify({"ok": True, "status": account.status, "verified": False})
+
+
+@bp.post("/personal-accounts/<account_id>/verify")
+@permission_required("platform.accounts.manage", csrf=True)
+def verify_personal_account(account_id: str):
+    db = get_db()
+    owner = db.scalar(select(PersonalPlatformAccount).where(
+        PersonalPlatformAccount.account_id == account_id,
+        PersonalPlatformAccount.owner_user_id == g.current_user.id,
+    ).with_for_update())
+    account = db.scalar(select(PlatformAccount).where(
+        PlatformAccount.id == account_id, PlatformAccount.account_mode == "personal",
+    ).with_for_update())
+    if not owner or not account:
+        return json_error("Personal account not found", 404)
+    platform = db.get(Platform, account.platform_id)
+    if not platform or platform.integration_status != "active" or "account_validate" not in (platform.capabilities or []):
+        return json_error("This platform has no verified account-validation capability", 409)
+    if account.status == "active":
+        return json_error("Account is already verified; reauthorize it before verifying again", 409)
+    if account.status not in {"unverified", "error"}:
+        return json_error("Account cannot be verified in its current state", 409)
+    active_secret = db.scalar(select(PlatformAccountSecret.id).where(
+        PlatformAccountSecret.account_id == account_id,
+        PlatformAccountSecret.status == "active",
+        PlatformAccountSecret.revoked_at.is_(None),
+    ).limit(1))
+    if not active_secret:
+        return json_error("No active credential is available for verification", 409)
+    existing = db.scalar(select(Task).where(
+        Task.personal_account_id == account_id,
+        Task.kind == "account_validate",
+        Task.status.in_(["queued", "leased", "running", "cancel_requested"]),
+    ).order_by(Task.created_at.desc()).limit(1))
+    if existing:
+        return jsonify({"task": {"id": existing.id, "kind": existing.kind, "status": existing.status}}), 202
+
+    task = Task(
+        user_id=g.current_user.id, personal_account_id=account_id,
+        kind="account_validate", status="queued", request_data={}, timeout_seconds=120,
+    )
+    db.add(task)
+    db.flush()
+    add_task_event(db, task, "queued", {"source": "account_verification"})
+    add_usage_event(db, task, "verification_requested", {"platform_key": platform.key})
+    db.add(AuditLog(
+        actor_user_id=g.current_user.id, target_user_id=g.current_user.id,
+        action="personal_account.verification_requested", entity_type="platform_account", entity_id=account_id,
+        metadata_json={"platform_key": platform.key},
+    ))
+    db.commit()
+    return jsonify({"task": {"id": task.id, "kind": task.kind, "status": task.status}}), 202
 
 
 @bp.delete("/personal-accounts/<account_id>")

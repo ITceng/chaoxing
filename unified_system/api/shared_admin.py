@@ -11,10 +11,10 @@ from unified_system.api.common import permission_required
 from unified_system.db import get_db
 from unified_system.models import (
     AccountAccessGrant, AccountUsageLog, AdminUserScope, AuditLog, Platform,
-    PlatformAccount, SharedPlatformAccount, User, utcnow,
+    PlatformAccount, PlatformAccountSecret, SharedPlatformAccount, Task, User, utcnow,
 )
 from unified_system.security import iso_utc, json_error, mask_account_hint, user_roles
-from unified_system.services.tasks import cancel_account_tasks
+from unified_system.services.tasks import add_task_event, add_usage_event, cancel_account_tasks
 
 bp = Blueprint("shared_admin_api", __name__, url_prefix="/api/v1/admin/shared-accounts")
 
@@ -67,7 +67,7 @@ def _shared_public(db, shared):
     return {
         "id": base.id, "platform_key": platform.key, "platform_name": platform.name,
         "label": base.label, "account_hint": shared.account_hint,
-        "status": base.status, "is_open": shared.is_open,
+        "status": base.status, "verified_at": iso_utc(base.verified_at), "is_open": shared.is_open,
         "available_from": iso_utc(shared.available_from), "expires_at": iso_utc(shared.expires_at),
         "max_concurrency": shared.max_concurrency,
         "grants": [{
@@ -159,6 +159,8 @@ def update_shared_account(account_id: str):
         if data["status"] not in {"disabled", "unverified"}:
             return json_error("Only disabled or unverified can be set manually; active requires platform verification", 400)
         base.status = data["status"]
+        base.verified_at = None
+        base.updated_at = utcnow()
         changed["status"] = base.status
     if "max_concurrency" in data:
         value = data["max_concurrency"]
@@ -197,11 +199,82 @@ def reauthorize_shared_account(account_id: str):
         return json_error(*error)
     if platform.auth_methods and auth_type not in platform.auth_methods:
         return json_error("Authentication method is not listed for this platform", 400)
+    cancel_account_tasks(db, account_id, "credential_rotated")
     _new_secret(db, account_id, g.current_user.id, auth_type, serialized)
     base.status = "unverified"
+    base.verified_at = None
+    base.updated_at = utcnow()
     _audit(db, "shared_account.reauthorized", account_id, {"auth_type": auth_type})
     db.commit()
     return jsonify({"ok": True, "status": "unverified", "verified": False})
+
+
+@bp.post("/<account_id>/verify")
+@permission_required("shared_accounts.manage", csrf=True)
+def verify_shared_account(account_id: str):
+    db = get_db()
+    shared = _managed_shared_account(db, account_id, lock=True)
+    if not shared or shared.created_by != g.current_user.id:
+        return json_error("Shared account not found", 404)
+    base = db.get(PlatformAccount, account_id)
+    platform = db.get(Platform, base.platform_id)
+    if platform.integration_status != "active" or "account_validate" not in (platform.capabilities or []):
+        return json_error("This platform has no verified account-validation capability", 409)
+    if base.status == "active":
+        return json_error("Account is already verified; reauthorize it before verifying again", 409)
+    if base.status not in {"unverified", "error"}:
+        return json_error("Account cannot be verified in its current state", 409)
+    active_secret = db.scalar(select(PlatformAccountSecret.id).where(
+        PlatformAccountSecret.account_id == account_id,
+        PlatformAccountSecret.status == "active",
+        PlatformAccountSecret.revoked_at.is_(None),
+    ).limit(1))
+    if not active_secret:
+        return json_error("No active credential is available for verification", 409)
+
+    now = utcnow()
+    self_grant = db.scalar(select(AccountAccessGrant).where(
+        AccountAccessGrant.shared_account_id == account_id,
+        AccountAccessGrant.user_id == g.current_user.id,
+        AccountAccessGrant.revoked_at.is_(None),
+    ).with_for_update())
+    if self_grant and (self_grant.valid_from > now or (self_grant.expires_at and self_grant.expires_at <= now)):
+        self_grant.revoked_at = now
+        self_grant = None
+    if self_grant:
+        kinds = (self_grant.scope or {}).get("task_kinds", [])
+        if kinds and "account_validate" not in kinds:
+            self_grant.scope = {"task_kinds": sorted(set(kinds) | {"account_validate"})}
+    else:
+        self_grant = AccountAccessGrant(
+            shared_account_id=account_id, user_id=g.current_user.id,
+            granted_by=g.current_user.id, valid_from=now, scope={},
+        )
+        db.add(self_grant)
+        db.flush()
+
+    existing = db.scalar(select(Task).where(
+        Task.shared_account_id == account_id,
+        Task.user_id == g.current_user.id,
+        Task.kind == "account_validate",
+        Task.status.in_(["queued", "leased", "running", "cancel_requested"]),
+    ).order_by(Task.created_at.desc()).limit(1))
+    if existing:
+        db.commit()
+        return jsonify({"task": {"id": existing.id, "kind": existing.kind, "status": existing.status}}), 202
+
+    task = Task(
+        user_id=g.current_user.id, shared_account_id=account_id,
+        access_grant_id=self_grant.id, kind="account_validate",
+        status="queued", request_data={}, timeout_seconds=120,
+    )
+    db.add(task)
+    db.flush()
+    add_task_event(db, task, "queued", {"source": "shared_account_verification"})
+    add_usage_event(db, task, "verification_requested", {"platform_key": platform.key})
+    _audit(db, "shared_account.verification_requested", account_id, {"platform_key": platform.key})
+    db.commit()
+    return jsonify({"task": {"id": task.id, "kind": task.kind, "status": task.status}}), 202
 
 
 @bp.post("/<account_id>/grants")

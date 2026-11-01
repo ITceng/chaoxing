@@ -17,7 +17,7 @@ The runtime sends only `X-Worker-Platform`, `X-Worker-ID`, and `X-Worker-Token` 
 ## Current implementation state
 
 - Implemented here: capability/course/auth/error models, abstract adapter methods, explicit registry, environment validation, authenticated worker HTTP client, task runner, heartbeat/cancel loop and fake-client tests.
-- Implemented: minimal per-account course catalog persistence and read API (`GET /api/v1/courses`) with personal/shared-grant isolation; bounded course sync payload is accepted only through a valid Worker task lease.
-- Not implemented/verified yet: registered/usable platform adapters (the Chaoxing candidate remains capability-disabled; Zhihuishu and Yinghua remain pending), user-driven account verification endpoint, course detail/resource/progress persistence APIs, real authorized-platform test, Docker Compose build.
+- Implemented: minimal per-account course catalog persistence and read API (`GET /api/v1/courses`) with personal/shared-grant isolation; bounded course sync payload is accepted only through a valid Worker task lease. A personal-account verification task endpoint exists but is gated on the server platform catalog exposing `account_validate`.
+- Not implemented/verified yet: registered/usable platform adapters (the Chaoxing candidate remains capability-disabled; Zhihuishu and Yinghua remain pending), actual platform credential-validation test for either account mode, course detail/resource/progress persistence APIs, Docker Compose build.
 - `workers/Dockerfile` builds the generic runtime image, but has no built-in platform adapter. Startup fails closed unless `WORKER_ADAPTER_FACTORY=package.module:factory` points to a verified adapter.
 - A missing adapter or unsupported capability remains unavailable; no worker should be started with placeholder capabilities. Docker build/run was not available for validation in this environment.

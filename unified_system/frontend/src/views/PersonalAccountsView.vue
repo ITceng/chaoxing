@@ -2,7 +2,7 @@
 import { computed, onMounted, reactive, ref } from 'vue'
 import { useRoute } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
-import { Delete, Edit, Key, Plus, Refresh, RefreshRight } from '@element-plus/icons-vue'
+import { CircleCheck, Delete, Edit, Key, Plus, Refresh, RefreshRight } from '@element-plus/icons-vue'
 import api from '../services/api'
 import type { Account, Platform } from '../types'
 import { dateTime, errorMessage, statusClass, statusText } from '../utils/format'
@@ -52,6 +52,19 @@ async function load() {
 }
 function openCreate() { credentialMode.value='create'; selected.value=null; resetCredentialForm(); credentialsVisible.value=true }
 function openReauthorize(row:Account) { credentialMode.value='reauthorize'; selected.value=row; resetCredentialForm(row); credentialsVisible.value=true }
+function canVerify(row:Account) {
+  const platform = platforms.value.find(item => item.key === row.platform_key)
+  return ['unverified','error'].includes(row.status) && platform?.integration_status === 'active' && platform.capabilities.includes('account_validate')
+}
+async function verifyAccount(row:Account) {
+  saving.value=true
+  try {
+    const response = await api.post<{task:{id:string;status:string}}>(`/personal-accounts/${row.id}/verify`,{})
+    ElMessage.success(`授权验证任务已${response.data.task.status === 'queued' ? '进入队列' : '在运行'}。验证通过前不会开放课程任务。`)
+    await load()
+  } catch(err) { ElMessage.error(errorMessage(err)) }
+  finally { saving.value=false }
+}
 function credentialPayload(): Record<string,unknown> | null {
   if (credentialForm.auth_type === 'username_password') {
     if (!credentialForm.username.trim() || !credentialForm.password) return null
@@ -104,17 +117,17 @@ onMounted(load)
 <template>
   <div class="page-wrap">
     <PageHeader eyebrow="PERSONAL ACCOUNTS" title="我的个人账号" description="仅显示当前账户拥有的账号。凭证由服务端加密保存，不会在列表或管理员接口中回显。"><el-button type="primary" :icon="Plus" @click="openCreate">添加个人账号</el-button></PageHeader>
-    <div class="notice-strip warning account-notice">新增或重新授权只会安全保存凭证。平台尚未接入验证流程，账号会保持“未验证”，不能执行课程任务。</div>
+    <div class="notice-strip warning account-notice">新增或重新授权只会安全保存凭证。仅当平台目录公开已验证的授权校验能力时，才可发起账号验证；账号验证通过前不能执行课程任务。</div>
     <section class="surface surface-pad account-surface">
       <div class="table-toolbar"><div class="toolbar-filters"><el-input v-model="search" class="table-search" clearable placeholder="搜索平台、备注或脱敏标识" @input="page=1"><template #prefix><el-icon><Key /></el-icon></template></el-input><el-select v-model="platformFilter" clearable class="filter-select" placeholder="全部平台" @change="page=1"><el-option v-for="p in platforms" :key="p.key" :label="p.name" :value="p.key" /></el-select></div><el-button :icon="Refresh" :loading="loading" @click="load">刷新</el-button></div>
       <el-alert v-if="error" :title="error" type="error" show-icon :closable="false" />
       <el-table v-loading="loading" :data="pageRows" class="data-table" row-key="id">
         <el-table-column label="平台 / 账号" min-width="205"><template #default="{row}"><div class="table-primary">{{ row.platform_name }}</div><div class="table-secondary">{{ row.account_hint }}</div></template></el-table-column>
         <el-table-column label="备注" min-width="135"><template #default="{row}"><span class="table-primary">{{ row.label || '未设置备注' }}</span></template></el-table-column>
-        <el-table-column label="授权状态" min-width="120"><template #default="{row}"><span class="status-pill" :class="statusClass(row.status)">{{ statusText(row.status) }}</span><div class="table-secondary">平台未验证账号</div></template></el-table-column>
+        <el-table-column label="授权状态" min-width="120"><template #default="{row}"><span class="status-pill" :class="statusClass(row.status)">{{ statusText(row.status) }}</span><div class="table-secondary">{{ row.verified_at ? `账号验证 ${dateTime(row.verified_at)}` : '需要账号授权验证' }}</div></template></el-table-column>
         <el-table-column label="创建时间" min-width="145"><template #default="{row}">{{ dateTime(row.created_at) }}</template></el-table-column>
         <el-table-column label="平台验证记录" min-width="145"><template #default="{row}">{{ dateTime(row.platform_last_verified_at) }}<div class="table-secondary">不是单账号验证记录</div></template></el-table-column>
-        <el-table-column label="操作" fixed="right" min-width="175"><template #default="{row}"><div class="table-actions"><el-button link type="primary" :icon="Edit" @click="openEdit(row)">备注</el-button><el-button link type="primary" :icon="RefreshRight" @click="openReauthorize(row)">重新授权</el-button><el-button link type="danger" :icon="Delete" @click="unbind(row)">解绑</el-button></div></template></el-table-column>
+        <el-table-column label="操作" fixed="right" min-width="245"><template #default="{row}"><div class="table-actions"><el-button v-if="canVerify(row)" link type="success" :icon="CircleCheck" :loading="saving" @click="verifyAccount(row)">验证授权</el-button><el-button link type="primary" :icon="Edit" @click="openEdit(row)">备注</el-button><el-button link type="primary" :icon="RefreshRight" @click="openReauthorize(row)">重新授权</el-button><el-button link type="danger" :icon="Delete" @click="unbind(row)">解绑</el-button></div></template></el-table-column>
         <template #empty><EmptyState title="还没有个人账号" description="添加后将以加密方式保存凭证；平台接入验证前，账号状态不会变为已验证。" /></template>
       </el-table>
       <div class="pagination-row"><span>共 {{ displayed.length }} 个账号</span><el-pagination v-model:current-page="page" v-model:page-size="pageSize" :total="displayed.length" :page-sizes="[8,16,32]" layout="sizes, prev, pager, next" /></div>

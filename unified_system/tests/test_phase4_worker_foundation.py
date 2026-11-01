@@ -353,3 +353,107 @@ def test_backend_only_accepts_read_only_tasks_and_claims_only_advertised_kind(cl
     )
     assert revoked.status_code == 200
     assert user.get("/api/v1/courses").get_json()["courses"] == []
+
+
+def test_personal_account_verification_requires_catalog_capability_and_records_only_result(client, app):
+    csrf = sign_in(client)
+    created = post(client, "/api/v1/personal-accounts", {
+        "platform_key": "chaoxing", "label": "Verification test", "account_hint": "te***@example.test",
+        "auth_type": "cookies", "credentials": {"cookies": "mock-cookie-not-a-real-session"},
+    }, csrf)
+    assert created.status_code == 201
+    account_id = created.get_json()["account"]["id"]
+    pending = post(client, f"/api/v1/personal-accounts/{account_id}/verify", {}, csrf)
+    assert pending.status_code == 409
+    create_account(app, "account-verification-outsider@example.test")
+    outsider = app.test_client()
+    outsider_csrf = sign_in(outsider, "account-verification-outsider@example.test", "valid-password-123")
+    assert post(outsider, f"/api/v1/personal-accounts/{account_id}/verify", {}, outsider_csrf).status_code == 404
+
+    with app.app_context():
+        db = get_db()
+        platform = db.scalar(select(Platform).where(Platform.key == "chaoxing"))
+        platform.integration_status = "active"
+        platform.capabilities = ["account_validate"]
+        db.commit()
+    queued = post(client, f"/api/v1/personal-accounts/{account_id}/verify", {}, csrf)
+    assert queued.status_code == 202
+    assert queued.get_json()["task"]["kind"] == "account_validate"
+
+    app.config["WORKER_TOKENS"] = {"chaoxing": "phase4-account-verify-token-at-least-32"}
+    headers = {"X-Worker-Platform":"chaoxing", "X-Worker-ID":"phase4-account-validator", "X-Worker-Token":"phase4-account-verify-token-at-least-32"}
+    worker = app.test_client()
+    assert worker.post("/api/internal/workers/heartbeat", json={"capabilities":["account_validate"]}, headers=headers).status_code == 200
+    claimed = worker.post("/api/internal/workers/claim", json={}, headers=headers)
+    assert claimed.status_code == 200
+    task = claimed.get_json()["task"]
+    lease = task["lease_token"]
+    assert worker.post(f"/api/internal/workers/{task['id']}/start", json={"lease_token":lease}, headers=headers).status_code == 200
+    success = worker.post(f"/api/internal/workers/{task['id']}/complete", json={
+        "lease_token":lease, "outcome":"succeeded",
+        "result_summary":{"operation":"account_validate", "authorized":True, "read_only":True},
+    }, headers=headers)
+    assert success.status_code == 200
+    listed = client.get("/api/v1/platform-accounts").get_json()["personal_accounts"][0]
+    assert listed["status"] == "active" and listed["verified_at"]
+    assert "mock-cookie-not-a-real-session" not in success.get_data(as_text=True)
+
+    reauthorized = post(client, f"/api/v1/personal-accounts/{account_id}/reauthorize", {
+        "auth_type":"cookies", "credentials":{"cookies":"second-mock-cookie"},
+    }, csrf)
+    assert reauthorized.status_code == 200 and reauthorized.get_json()["verified"] is False
+    queued_again = post(client, f"/api/v1/personal-accounts/{account_id}/verify", {}, csrf)
+    assert queued_again.status_code == 202
+    assert worker.post("/api/internal/workers/heartbeat", json={"capabilities":["account_validate"]}, headers=headers).status_code == 200
+    claimed_again = worker.post("/api/internal/workers/claim", json={}, headers=headers).get_json()
+    task_id, lease = claimed_again["task"]["id"], claimed_again["task"]["lease_token"]
+    assert worker.post(f"/api/internal/workers/{task_id}/start", json={"lease_token":lease}, headers=headers).status_code == 200
+    rejected = worker.post(f"/api/internal/workers/{task_id}/complete", json={
+        "lease_token":lease, "outcome":"failed", "error_code":"authorization_failed",
+    }, headers=headers)
+    assert rejected.status_code == 200
+    account = client.get("/api/v1/platform-accounts").get_json()["personal_accounts"][0]
+    assert account["status"] == "error" and account["verified_at"] is None
+
+
+def test_shared_account_owner_can_validate_while_private_account_is_closed(client, app):
+    csrf = sign_in(client)
+    account_id = create_shared(client, csrf, is_open=False)
+    with app.app_context():
+        db = get_db()
+        platform = db.scalar(select(Platform).where(Platform.key == "chaoxing"))
+        platform.integration_status = "active"
+        platform.capabilities = ["account_validate"]
+        db.commit()
+    queued = post(client, f"/api/v1/admin/shared-accounts/{account_id}/verify", {}, csrf)
+    assert queued.status_code == 202
+    with app.app_context():
+        from unified_system.models import AccountAccessGrant, SharedPlatformAccount, User
+        db = get_db()
+        owner = db.scalar(select(User).where(User.email == "root@example.test"))
+        grant = db.scalar(select(AccountAccessGrant).where(
+            AccountAccessGrant.shared_account_id == account_id,
+            AccountAccessGrant.user_id == owner.id,
+            AccountAccessGrant.revoked_at.is_(None),
+        ))
+        assert get_db().get(SharedPlatformAccount, account_id).is_open is False
+        assert grant is not None and grant.granted_by == owner.id
+
+    app.config["WORKER_TOKENS"] = {"chaoxing": "phase4-shared-validation-token-long-123456"}
+    headers = {"X-Worker-Platform":"chaoxing", "X-Worker-ID":"phase4-shared-validator", "X-Worker-Token":"phase4-shared-validation-token-long-123456"}
+    worker = app.test_client()
+    assert worker.post("/api/internal/workers/heartbeat", json={"capabilities":["account_validate"]}, headers=headers).status_code == 200
+    claimed = worker.post("/api/internal/workers/claim", json={}, headers=headers)
+    assert claimed.status_code == 200
+    task = claimed.get_json()["task"]
+    lease = task["lease_token"]
+    assert worker.post(f"/api/internal/workers/{task['id']}/start", json={"lease_token":lease}, headers=headers).status_code == 200
+    completed = worker.post(f"/api/internal/workers/{task['id']}/complete", json={
+        "lease_token":lease, "outcome":"succeeded",
+        "result_summary":{"operation":"account_validate", "authorized":True, "read_only":True},
+    }, headers=headers)
+    assert completed.status_code == 200
+    with app.app_context():
+        account = get_db().get(PlatformAccount, account_id)
+        assert account.status == "active" and account.verified_at is not None
+        assert get_db().get(SharedPlatformAccount, account_id).is_open is False

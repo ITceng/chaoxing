@@ -116,6 +116,17 @@ class WorkerEngine:
                 self.client.complete_task(task_id, lease_token, "failed", error_code=code)
             logger.warning("task completed with adapter error code=%s", code)
             return
+        if kind == "account_validate":
+            if not isinstance(value, dict) or type(value.get("authorized")) is not bool:
+                self.client.complete_task(task_id, lease_token, "failed", error_code="unsafe_adapter_output")
+                logger.warning("account validation result rejected by safe output boundary")
+                return
+            if not value["authorized"]:
+                self.client.complete_task(task_id, lease_token, "failed", error_code="authorization_failed")
+                return
+            summary = {"operation": "account_validate", "authorized": True, "read_only": True}
+            self.client.complete_task(task_id, lease_token, "succeeded", result_summary=summary)
+            return
         try:
             summary = _result_summary(kind, value)
             course_catalog = _course_catalog_payload(kind, value, self.info.key)
