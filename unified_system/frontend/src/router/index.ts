@@ -16,6 +16,7 @@ const router = createRouter({
         { path: 'dashboard', name: 'dashboard', component: () => import('../views/DashboardView.vue'), meta: { title: '工作台' } },
         { path: 'platforms', name: 'platforms', component: () => import('../views/PlatformsView.vue'), meta: { title: '平台中心' } },
         { path: 'accounts', name: 'accounts', component: () => import('../views/PersonalAccountsView.vue'), meta: { title: '个人账号' } },
+        { path: 'courses', name: 'courses', component: () => import('../views/CoursesView.vue'), meta: { title: '课程数据' } },
         { path: 'shared', name: 'shared', component: () => import('../views/SharedAccountsView.vue'), meta: { title: '共享账号' } },
         { path: 'profile', name: 'profile', component: () => import('../views/ProfileView.vue'), meta: { title: '个人中心' } },
         { path: 'admin', redirect: '/app/admin/dashboard' },

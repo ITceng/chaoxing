@@ -198,6 +198,25 @@ class SharedPlatformAccount(Base):
     )
 
 
+class PlatformCourse(Base):
+    __tablename__ = "platform_courses"
+    id: Mapped[str] = mapped_column(String(32), primary_key=True, default=new_id)
+    account_id: Mapped[str] = mapped_column(ForeignKey("platform_accounts.id", ondelete="CASCADE"), nullable=False, index=True)
+    course_key: Mapped[str] = mapped_column(String(160), nullable=False)
+    course_name: Mapped[str] = mapped_column(String(240), nullable=False)
+    teacher_name: Mapped[str] = mapped_column(String(160), default="", nullable=False)
+    semester: Mapped[str] = mapped_column(String(120), default="", nullable=False)
+    resource_status: Mapped[str] = mapped_column(String(40), default="UNKNOWN", nullable=False)
+    source_verified: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    last_synced_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, index=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow, nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow, onupdate=utcnow, nullable=False)
+    __table_args__ = (
+        UniqueConstraint("account_id", "course_key", name="uq_platform_course_account_key"),
+        Index("ix_platform_courses_account_synced", "account_id", "last_synced_at"),
+    )
+
+
 class PlatformAccountSecret(Base):
     __tablename__ = "platform_account_secrets"
     id: Mapped[str] = mapped_column(String(32), primary_key=True, default=new_id)

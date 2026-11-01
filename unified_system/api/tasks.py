@@ -12,6 +12,7 @@ from unified_system.models import (
     AccountAccessGrant, PersonalPlatformAccount, Platform, PlatformAccount,
     SharedPlatformAccount, Task, TaskEvent, User, utcnow,
 )
+from unified_system.platforms.common.capabilities import READ_ONLY_TASK_KINDS
 from unified_system.security import iso_utc, json_error
 from unified_system.services.tasks import add_task_event, add_usage_event, request_task_cancel
 
@@ -131,6 +132,10 @@ def create_task():
         return json_error("Platform account has not been verified and activated", 409)
     if platform.integration_status != "active":
         return json_error("Platform integration is not active", 409)
+    if kind not in READ_ONLY_TASK_KINDS:
+        return json_error("Only explicitly supported read-only platform tasks are enabled", 400)
+    if kind not in (platform.capabilities or []):
+        return json_error("This platform adapter has not verified the requested capability", 409)
     task = Task(
         user_id=g.current_user.id,
         personal_account_id=personal_id,

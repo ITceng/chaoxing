@@ -1,0 +1,10 @@
+FROM python:3.11-slim
+
+WORKDIR /app
+COPY requirements.txt /tmp/unified-requirements.txt
+RUN pip install --no-cache-dir -r /tmp/unified-requirements.txt
+COPY . /app/unified_system
+ENV PYTHONPATH=/app \
+    FLASK_APP=unified_system.app:create_app
+EXPOSE 8088
+CMD ["flask", "--app", "unified_system.app:create_app", "run", "--host", "0.0.0.0", "--port", "8088"]

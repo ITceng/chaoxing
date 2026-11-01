@@ -11,6 +11,7 @@ from unified_system.api.auth import bp as auth_bp
 from unified_system.api.catalog import bp as catalog_bp
 from unified_system.api.accounts import bp as accounts_bp
 from unified_system.api.activity import bp as activity_bp
+from unified_system.api.courses import bp as courses_bp
 from unified_system.api.shared_admin import bp as shared_admin_bp
 from unified_system.api.tasks import bp as tasks_bp
 from unified_system.api.worker import bp as worker_bp
@@ -48,6 +49,7 @@ def create_app(test_config: dict | None = None) -> Flask:
     app.register_blueprint(catalog_bp)
     app.register_blueprint(accounts_bp)
     app.register_blueprint(activity_bp)
+    app.register_blueprint(courses_bp)
     app.register_blueprint(shared_admin_bp)
     app.register_blueprint(tasks_bp)
     app.register_blueprint(worker_bp)

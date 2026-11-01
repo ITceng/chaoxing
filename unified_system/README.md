@@ -30,6 +30,24 @@ npm run dev
 
 Vite listens on `0.0.0.0:5173`. Browser requests use the relative `/api/v1` path; Vite proxies those requests to `VITE_API_PROXY_TARGET` (default `http://127.0.0.1:8088`). No browser JavaScript calls localhost, and session cookies remain same-origin from the browser's perspective. To use a different backend, set `VITE_API_PROXY_TARGET` in an untracked `.env.local` file. Do not put secrets in Vite `VITE_*` variables.
 
+### Optional Docker development stack
+
+`docker-compose.dev.yml` starts PostgreSQL, the Flask API, and Vite on localhost-only ports (`8088`, `5173`). It uses `flask init-db` for a disposable development schema and is not a production deployment/migration workflow. No platform Worker service is included until a concrete, verified adapter exists. Docker was not installed in the implementation environment, so this Compose file has not been built or run here.
+
+Windows PowerShell (first-time administrator bootstrap):
+
+```powershell
+Set-Location C:\path\to\chaoxing\unified_system
+$env:BOOTSTRAP_ADMIN_EMAIL = Read-Host 'Bootstrap email'
+$secure = Read-Host 'Bootstrap password' -AsSecureString
+$env:BOOTSTRAP_ADMIN_PASSWORD = [System.Net.NetworkCredential]::new('', $secure).Password
+docker compose -f .\docker-compose.dev.yml up --build -d
+docker compose -f .\docker-compose.dev.yml exec -e "BOOTSTRAP_ADMIN_EMAIL=$env:BOOTSTRAP_ADMIN_EMAIL" -e "BOOTSTRAP_ADMIN_PASSWORD=$env:BOOTSTRAP_ADMIN_PASSWORD" backend flask --app unified_system.app:create_app bootstrap-admin
+Remove-Item Env:BOOTSTRAP_ADMIN_EMAIL, Env:BOOTSTRAP_ADMIN_PASSWORD
+```
+
+The bootstrap password is only passed to the one-off CLI container command; do not save it in a tracked file.
+
 For local single-origin serving, run `npm run build` first. Flask serves `frontend/dist` and its history-mode routes when the build exists; it falls back to the legacy static shell only when no build exists.
 
 ## Auth and secrets
@@ -50,11 +68,11 @@ npm run typecheck
 npm run build
 ```
 
-A fresh SQLite database has been tested through `upgrade head`, downgrade of `0002_user_sessions` to `0001_initial`, and re-upgrade. A populated `0001_initial` SQLite database was also upgraded and its existing user row verified intact; no session rows are fabricated during migration. PostgreSQL DDL is exported to `unified_system/postgresql-schema.sql`. SQLite tests enable foreign keys. PostgreSQL transaction/locking behavior and production deployment still require a real PostgreSQL test run.
+A fresh SQLite database has been tested through `upgrade head` at `0003_platform_courses`. The additive `0003_platform_courses` migration adds a minimal per-account course cache; the authenticated `/api/v1/courses` read API rechecks live personal ownership/shared grants, and Worker course sync accepts only bounded, allowlisted course fields under a valid task lease. A populated `0001_initial` SQLite database was previously upgraded with its existing user row intact; no session rows were fabricated by `0002_user_sessions`. PostgreSQL DDL is exported to `unified_system/postgresql-schema.sql`. SQLite tests enable foreign keys. PostgreSQL transaction/locking behavior and production deployment still require a real PostgreSQL test run.
 
 ## Current capability boundary
 
-- **Implemented:** invitation-based registration, login, role and scoped-admin APIs, session revocation, personal/shared account management, encrypted credential submission, authorized shared-account visibility, users/invitations/audit management, live dashboard aggregates, platform/Worker status, and responsive browser pages.
+- **Implemented:** invitation-based registration, login, role and scoped-admin APIs, session revocation, personal/shared account management, encrypted credential submission, authorized shared-account visibility, users/invitations/audit management, live dashboard aggregates, platform/Worker status, a lease-validated minimal per-account course catalog cache/read API, and a course-data page.
 - **Not integrated:** real Chaoxing/Zhihuishu/Yinghua authentication or execution Worker, per-account platform verification, system announcements, email delivery, AI provider, Redis queue, Docker Compose production, Nginx/HTTPS, PostgreSQL migration/backup drills.
-- All platform catalog states remain `pending`; accounts remain `unverified` until a real verification adapter exists. The interface must not be treated as a learning-task execution service.
+- All platform catalog states remain `pending`; accounts remain `unverified` until a real verification adapter exists. The Phase 4 Worker runtime and course cache are foundation code only; actual platform tasks remain unavailable until a concrete adapter is verified.
 - The legacy repository contains an old committed AI credential. This application neither reads nor reuses that configuration; supplier-side revocation/rotation remains an operator action.

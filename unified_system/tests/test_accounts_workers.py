@@ -46,6 +46,7 @@ def activate_for_worker(app, account_id):
         platform = db.get(Platform, base.platform_id)
         base.status = "active"
         platform.integration_status = "active"
+        platform.capabilities = ["course_sync"]
         db.commit()
 
 
@@ -137,7 +138,7 @@ def test_worker_lease_serializes_account_tasks_and_returns_credentials_only_to_w
     worker = app.test_client()
     unauthorized = {**headers, "X-Worker-Token": "wrong-token"}
     assert worker.post("/api/internal/workers/heartbeat", json={}, headers=unauthorized).status_code == 401
-    assert worker.post("/api/internal/workers/heartbeat", json={"version": "test", "capabilities": []}, headers=headers).status_code == 200
+    assert worker.post("/api/internal/workers/heartbeat", json={"version": "test", "capabilities": ["course_sync"]}, headers=headers).status_code == 200
     claimed = worker.post("/api/internal/workers/claim", json={}, headers=headers)
     assert claimed.status_code == 200
     payload = claimed.get_json()
@@ -155,10 +156,26 @@ def test_worker_lease_serializes_account_tasks_and_returns_credentials_only_to_w
         "lease_token": token, "outcome": "succeeded", "result_summary": {"metadata": {"access_token": "never-log"}},
     }, headers=headers)
     assert unsafe_summary.status_code == 400
+    unsafe_catalog = worker.post(f"/api/internal/workers/{task_id}/complete", json={
+        "lease_token": token, "outcome": "succeeded", "course_catalog": [{"course_id": "x", "course_name": "Course", "password": "must-not-store"}],
+    }, headers=headers)
+    assert unsafe_catalog.status_code == 400
+    duplicate_catalog = worker.post(f"/api/internal/workers/{task_id}/complete", json={
+        "lease_token": token, "outcome": "succeeded", "course_catalog": [
+            {"course_id": "dup", "course_name": "First"}, {"course_id": "dup", "course_name": "Second"},
+        ],
+    }, headers=headers)
+    assert duplicate_catalog.status_code == 400
     complete = worker.post(f"/api/internal/workers/{task_id}/complete", json={
         "lease_token": token, "outcome": "succeeded", "result_summary": {"items": 1},
+        "course_catalog": [{"course_id": "cx-100", "course_name": "Intro to Systems"}],
     }, headers=headers)
     assert complete.status_code == 200
+    assert complete.get_json()["synced_course_count"] == 1
+    visible_courses = user_client.get("/api/v1/courses").get_json()["courses"]
+    assert len(visible_courses) == 1
+    assert visible_courses[0]["course_id"] == "cx-100"
+    assert visible_courses[0]["source_verified"] is True
     assert worker.post("/api/internal/workers/claim", json={}, headers=headers).status_code == 200
 
 
@@ -204,7 +221,7 @@ def test_revoking_grant_requests_running_task_cancel_and_keeps_lease_until_ack(c
     app.config["WORKER_TOKENS"] = {"chaoxing": "revocation-worker-token-for-tests"}
     headers = {"X-Worker-Platform": "chaoxing", "X-Worker-ID": "cx-revoke-1", "X-Worker-Token": "revocation-worker-token-for-tests"}
     worker = app.test_client()
-    worker.post("/api/internal/workers/heartbeat", json={}, headers=headers)
+    worker.post("/api/internal/workers/heartbeat", json={"capabilities": ["course_sync"]}, headers=headers)
     claimed_response = worker.post("/api/internal/workers/claim", json={}, headers=headers)
     assert claimed_response.status_code == 200
     claimed = claimed_response.get_json()
@@ -261,7 +278,7 @@ def test_worker_reaps_expired_lease_without_starving_next_task(client, app):
     app.config["WORKER_TOKENS"] = {"chaoxing": "lease-expiry-worker-token"}
     headers = {"X-Worker-Platform": "chaoxing", "X-Worker-ID": "cx-expiry-1", "X-Worker-Token": "lease-expiry-worker-token"}
     worker = app.test_client()
-    assert worker.post("/api/internal/workers/heartbeat", json={}, headers=headers).status_code == 200
+    assert worker.post("/api/internal/workers/heartbeat", json={"capabilities": ["course_sync"]}, headers=headers).status_code == 200
     first = worker.post("/api/internal/workers/claim", json={}, headers=headers).get_json()
     assert first["task"]["id"] == task_ids[0]
     with app.app_context():

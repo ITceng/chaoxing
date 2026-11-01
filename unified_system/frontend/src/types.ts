@@ -20,6 +20,20 @@ export interface Platform {
   status_note: string
 }
 
+export interface Course {
+  id: string
+  account_id: string
+  account_mode: 'personal' | 'shared'
+  platform_key: string
+  course_id: string
+  course_name: string
+  teacher_name: string
+  semester: string
+  resource_status: string
+  source_verified: boolean
+  last_synced_at: string
+}
+
 export interface Account {
   id: string
   platform_key: string

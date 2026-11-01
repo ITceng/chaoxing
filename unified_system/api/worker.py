@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hmac
 import json
+import re
 import secrets
 from datetime import timedelta
 
@@ -11,9 +12,10 @@ from sqlalchemy import select
 from unified_system.db import get_db
 from unified_system.models import (
     AccountAccessGrant, AccountExecutionLease, PersonalPlatformAccount,
-    Platform, PlatformAccount, PlatformAccountSecret, SharedPlatformAccount, Task,
+    Platform, PlatformAccount, PlatformAccountSecret, PlatformCourse, SharedPlatformAccount, Task,
     User, WorkerInstance, utcnow,
 )
+from unified_system.platforms.common.capabilities import READ_ONLY_TASK_KINDS
 from unified_system.security import decrypt_secret, hash_token, iso_utc, json_error
 from unified_system.services.tasks import add_task_event, add_usage_event, release_task_lease
 
@@ -129,6 +131,10 @@ def heartbeat(db, platform, worker_id):
     capabilities = data.get("capabilities", [])
     if not isinstance(capabilities, list) or len(capabilities) > 64 or any(not isinstance(x, str) or len(x) > 80 for x in capabilities):
         return json_error("capabilities must be a list of short strings", 400)
+    if not set(capabilities).issubset(READ_ONLY_TASK_KINDS):
+        return json_error("Worker may advertise only approved read-only task kinds", 400)
+    if not set(capabilities).issubset(set(platform.capabilities or [])):
+        return json_error("Worker capabilities are not enabled by the verified platform catalog", 409)
     worker = db.scalar(select(WorkerInstance).where(WorkerInstance.worker_id == worker_id).with_for_update())
     if worker and worker.platform_id != platform.id:
         return json_error("Worker ID is already registered for another platform", 409)
@@ -153,17 +159,20 @@ def claim_task(db, platform, worker_id):
     last_seen_cutoff = now - timedelta(seconds=current_app.config["WORKER_HEARTBEAT_TTL_SECONDS"])
     if not worker or worker.platform_id != platform.id or worker.status != "online" or not worker.last_seen_at or worker.last_seen_at < last_seen_cutoff:
         return json_error("Worker must send a recent heartbeat before claiming tasks", 409)
+    worker_kinds = set(worker.capabilities or [])
+    if not worker_kinds or not worker_kinds.issubset(set(platform.capabilities or [])):
+        return json_error("Worker has no currently enabled read-only task capabilities", 409)
     personal_candidates = db.execute(
         select(Task.id, Task.created_at)
         .join(PersonalPlatformAccount, PersonalPlatformAccount.account_id == Task.personal_account_id)
         .join(PlatformAccount, PlatformAccount.id == PersonalPlatformAccount.account_id)
-        .where(Task.status == "queued", PlatformAccount.platform_id == platform.id)
+        .where(Task.status == "queued", PlatformAccount.platform_id == platform.id, Task.kind.in_(worker_kinds))
     ).all()
     shared_candidates = db.execute(
         select(Task.id, Task.created_at)
         .join(SharedPlatformAccount, SharedPlatformAccount.account_id == Task.shared_account_id)
         .join(PlatformAccount, PlatformAccount.id == SharedPlatformAccount.account_id)
-        .where(Task.status == "queued", PlatformAccount.platform_id == platform.id)
+        .where(Task.status == "queued", PlatformAccount.platform_id == platform.id, Task.kind.in_(worker_kinds))
     ).all()
     candidates = sorted([*personal_candidates, *shared_candidates], key=lambda row: row.created_at)[:100]
 
@@ -356,16 +365,80 @@ def task_heartbeat(db, platform, worker_id, task_id):
     return jsonify({"ok": True, "cancel_requested": task.status == "cancel_requested", "lease_expires_at": iso_utc(expires)})
 
 
+def _parse_course_catalog(platform, task, raw_catalog):
+    if task.kind not in {"course_sync", "course_list"} or task.kind not in (platform.capabilities or []):
+        return None, json_error("Course catalogs are accepted only for an enabled read-only course task", 400)
+    if not isinstance(raw_catalog, list) or len(raw_catalog) > 500:
+        return None, json_error("course_catalog must be a list of at most 500 courses", 400)
+    try:
+        encoded_size = len(json.dumps(raw_catalog, ensure_ascii=False).encode("utf-8"))
+    except (TypeError, ValueError):
+        return None, json_error("course_catalog must contain JSON values", 400)
+    if encoded_size > 512 * 1024 or _has_sensitive_key(raw_catalog):
+        return None, json_error("course_catalog is too large or contains sensitive fields", 400)
+
+    required = {"course_id", "course_name"}
+    allowed = required | {"teacher_name", "semester", "resource_status"}
+    normalized = []
+    seen = set()
+    for item in raw_catalog:
+        if not isinstance(item, dict) or not required.issubset(item) or set(item) - allowed:
+            return None, json_error("Each course must contain only the documented catalog fields", 400)
+        values = {}
+        for key, max_length in (("course_id", 160), ("course_name", 240), ("teacher_name", 160), ("semester", 120), ("resource_status", 40)):
+            value = item.get(key, "" if key != "resource_status" else "UNKNOWN")
+            if not isinstance(value, str) or len(value.strip()) > max_length or "\x00" in value:
+                return None, json_error(f"Invalid course field: {key}", 400)
+            values[key] = value.strip()
+        if not values["course_id"] or not values["course_name"]:
+            return None, json_error("course_id and course_name must not be empty", 400)
+        if not values["resource_status"]:
+            values["resource_status"] = "UNKNOWN"
+        if values["course_id"] in seen:
+            return None, json_error("course_catalog contains duplicate course_id values", 400)
+        seen.add(values["course_id"])
+        normalized.append(values)
+    return normalized, None
+
+
+def _store_course_catalog(db, task, catalog, synced_at):
+    account_id = task.personal_account_id or task.shared_account_id
+    keys = [item["course_id"] for item in catalog]
+    existing = db.scalars(select(PlatformCourse).where(
+        PlatformCourse.account_id == account_id,
+        PlatformCourse.course_key.in_(keys),
+    ).with_for_update()).all() if keys else []
+    by_key = {course.course_key: course for course in existing}
+    for item in catalog:
+        course = by_key.get(item["course_id"])
+        if course is None:
+            course = PlatformCourse(account_id=account_id, course_key=item["course_id"])
+            db.add(course)
+        course.course_name = item["course_name"]
+        course.teacher_name = item["teacher_name"]
+        course.semester = item["semester"]
+        course.resource_status = item["resource_status"]
+        course.source_verified = True
+        course.last_synced_at = synced_at
+    return len(catalog)
+
+
 @bp.post("/<task_id>/complete")
 @_worker_route
 def complete_task(db, platform, worker_id, task_id):
+    if request.content_length is not None and request.content_length > 600 * 1024:
+        return json_error("Worker completion payload exceeds the 600 KiB limit", 413)
     body = request.get_json(silent=True) or {}
+    if not isinstance(body, dict) or set(body) - {"lease_token", "outcome", "result_summary", "error_code", "course_catalog"}:
+        return json_error("Unexpected worker completion fields", 400)
     task, lease, error = _validate_lease(db, platform, worker_id, task_id, body)
     if error:
         return error
     outcome = body.get("outcome")
     if outcome not in {"succeeded", "failed", "cancelled"}:
         return json_error("outcome must be succeeded, failed, or cancelled", 400)
+    if outcome == "failed" and not re.fullmatch(r"[a-z][a-z0-9_]{1,63}", str(body.get("error_code", "worker_failed"))):
+        return json_error("error_code must be a short lowercase identifier", 400)
     if task.status not in {"leased", "running", "cancel_requested"}:
         return json_error("Task is not active", 409)
     if task.status == "leased" and outcome == "succeeded":
@@ -375,12 +448,28 @@ def complete_task(db, platform, worker_id, task_id):
         return json_error("result_summary must be an object no larger than 4 KiB", 400)
     if _has_sensitive_key(summary):
         return json_error("Sensitive values must not be included in result_summary", 400)
+    has_course_catalog = "course_catalog" in body
+    course_catalog = None
+    if has_course_catalog:
+        if outcome != "succeeded":
+            return json_error("course_catalog is accepted only for successful tasks", 400)
+        course_catalog, catalog_error = _parse_course_catalog(platform, task, body["course_catalog"])
+        if catalog_error:
+            return catalog_error
     now = utcnow()
-    if task.status == "cancel_requested":
+    still_authorized, _reason, _secret = _task_is_eligible(db, task)
+    if not still_authorized:
+        outcome = "timed_out" if task.error_code == "task_timeout" else "cancelled"
+        if outcome == "cancelled":
+            task.error_code = task.error_code or "authorization_revoked"
+    elif task.status == "cancel_requested":
         outcome = "timed_out" if task.error_code == "task_timeout" else "cancelled"
     elif task.started_at and now >= task.started_at + timedelta(seconds=task.timeout_seconds):
         outcome = "timed_out"
         task.error_code = "task_timeout"
+    synced_course_count = 0
+    if outcome == "succeeded" and course_catalog is not None:
+        synced_course_count = _store_course_catalog(db, task, course_catalog, now)
     task.status = outcome
     task.result_summary = summary if outcome == "succeeded" else {}
     task.finished_at = now
@@ -392,4 +481,4 @@ def complete_task(db, platform, worker_id, task_id):
     task.lease_expires_at = None
     task.worker_id = None
     db.commit()
-    return jsonify({"ok": True, "status": task.status})
+    return jsonify({"ok": True, "status": task.status, "synced_course_count": synced_course_count})

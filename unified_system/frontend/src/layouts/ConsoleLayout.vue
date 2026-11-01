@@ -17,6 +17,7 @@ const userNav = [
   { path: '/app/dashboard', label: '工作台', icon: HomeFilled },
   { path: '/app/platforms', label: '平台中心', icon: Grid },
   { path: '/app/accounts', label: '个人账号', icon: Key },
+  { path: '/app/courses', label: '课程数据', icon: Files },
   { path: '/app/shared', label: '共享账号', icon: Collection },
   { path: '/app/profile', label: '个人中心', icon: User },
 ]
