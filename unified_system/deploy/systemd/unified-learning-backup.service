@@ -1,0 +1,20 @@
+[Unit]
+Description=Encrypted PostgreSQL backup for the unified learning system
+Requires=docker.service
+After=docker.service
+
+[Service]
+Type=oneshot
+User=agentuser
+Group=agentuser
+SupplementaryGroups=docker
+WorkingDirectory=%h/chaoxing/unified_system
+Environment=ENV_FILE=%h/chaoxing/unified_system/deploy/.env.production
+Environment=BACKUP_DIR=%h/chaoxing/unified_system/deploy/backups
+ExecStart=%h/chaoxing/unified_system/deploy/backup-postgres.sh
+UMask=0077
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=full
+ProtectHome=read-only
+ReadWritePaths=%h/chaoxing/unified_system/deploy/backups

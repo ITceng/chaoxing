@@ -1,0 +1,326 @@
+name: unified-learning
+
+x-logging: &bounded-logs
+  driver: json-file
+  options:
+    max-size: "10m"
+    max-file: "5"
+
+x-python-build-args: &python-build-args
+  PYTHON_BASE: ${PYTHON_BASE:-python:3.12-slim-bookworm}
+
+x-frontend-build-args: &frontend-build-args
+  NODE_BASE: ${NODE_BASE:-node:20-alpine}
+  NGINX_BASE: ${NGINX_BASE:-nginx:alpine}
+
+x-runtime-env: &runtime-env
+  APP_ENV: production
+  APP_SECRET_KEY: ${APP_SECRET_KEY:?Set APP_SECRET_KEY in .env.production}
+  CREDENTIAL_ENCRYPTION_KEY: ${CREDENTIAL_ENCRYPTION_KEY:?Set CREDENTIAL_ENCRYPTION_KEY in .env.production}
+  DATA_DIR: /tmp/unified
+  COOKIE_SECURE: "1"
+  TRUSTED_PROXY_HOPS: ${TRUSTED_PROXY_HOPS:-1}
+  DB_POOL_SIZE: ${DB_POOL_SIZE:-5}
+  DB_MAX_OVERFLOW: ${DB_MAX_OVERFLOW:-5}
+  DB_POOL_TIMEOUT_SECONDS: ${DB_POOL_TIMEOUT_SECONDS:-30}
+  DB_POOL_RECYCLE_SECONDS: ${DB_POOL_RECYCLE_SECONDS:-1800}
+  WORKER_LEASE_TTL_SECONDS: ${WORKER_LEASE_TTL_SECONDS:-60}
+  WORKER_HEARTBEAT_TTL_SECONDS: ${WORKER_HEARTBEAT_TTL_SECONDS:-90}
+  WORKER_TOKEN_CHAOXING: ${WORKER_TOKEN_CHAOXING:-}
+  WORKER_TOKEN_ZHIHUISU: ${WORKER_TOKEN_ZHIHUISU:-}
+  WORKER_TOKEN_YINGHUA: ${WORKER_TOKEN_YINGHUA:-}
+
+services:
+  postgres:
+    image: ${POSTGRES_IMAGE:-postgres:16-alpine}
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_ADMIN_USER:?Set POSTGRES_ADMIN_USER in .env.production}
+      POSTGRES_PASSWORD: ${POSTGRES_ADMIN_PASSWORD:?Set POSTGRES_ADMIN_PASSWORD in .env.production}
+      POSTGRES_DB: postgres
+      APP_DB_NAME: ${APP_DB_NAME:?Set APP_DB_NAME in .env.production}
+      APP_DB_OWNER: ${APP_DB_OWNER:?Set APP_DB_OWNER in .env.production}
+      APP_DB_OWNER_PASSWORD: ${APP_DB_OWNER_PASSWORD:?Set APP_DB_OWNER_PASSWORD in .env.production}
+      APP_DB_USER: ${APP_DB_USER:?Set APP_DB_USER in .env.production}
+      APP_DB_PASSWORD: ${APP_DB_PASSWORD:?Set APP_DB_PASSWORD in .env.production}
+      PGDATA: /var/lib/postgresql/data/pgdata
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./postgres/init/10-create-app-db.sh:/docker-entrypoint-initdb.d/10-create-app-db.sh:ro
+    networks:
+      - database
+    read_only: true
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,size=64m
+      - /var/run/postgresql:rw,noexec,nosuid,size=16m
+    security_opt:
+      - no-new-privileges:true
+    pids_limit: 256
+    stop_grace_period: 1m
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready --username=\"$${POSTGRES_USER}\" --dbname=\"$${POSTGRES_DB}\""]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 30s
+    deploy:
+      resources:
+        limits:
+          cpus: "1.00"
+          memory: 1G
+    logging: *bounded-logs
+
+  backend:
+    image: unified-learning-api:local
+    build:
+      context: .
+      dockerfile: Dockerfile
+      args: *python-build-args
+    restart: unless-stopped
+    environment:
+      <<: *runtime-env
+      DATABASE_URL: postgresql+psycopg://${APP_DB_USER}:${APP_DB_PASSWORD}@postgres:5432/${APP_DB_NAME}
+    networks:
+      - web_backend
+      - worker_backend
+      - database
+    depends_on:
+      postgres:
+        condition: service_healthy
+    read_only: true
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,size=96m
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    pids_limit: 128
+    stop_grace_period: 40s
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8088/api/v1/health/ready', timeout=3)"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 35s
+    deploy:
+      resources:
+        limits:
+          cpus: "1.00"
+          memory: 768M
+    logging: *bounded-logs
+
+  edge:
+    image: unified-learning-edge:local
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+      args: *frontend-build-args
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:${EDGE_PORT:-8080}:8080"
+    networks:
+      - web_backend
+    depends_on:
+      backend:
+        condition: service_healthy
+    read_only: true
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,size=32m
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    pids_limit: 64
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1:8080/healthz"]
+      interval: 15s
+      timeout: 4s
+      retries: 5
+      start_period: 10s
+    deploy:
+      resources:
+        limits:
+          cpus: "0.25"
+          memory: 128M
+    logging: *bounded-logs
+
+  migrate:
+    image: unified-learning-api:local
+    build:
+      context: .
+      dockerfile: Dockerfile
+      args: *python-build-args
+    profiles: ["ops"]
+    command: ["alembic", "-c", "unified_system/alembic.ini", "upgrade", "head"]
+    environment:
+      DATABASE_URL: postgresql+psycopg://${APP_DB_OWNER}:${APP_DB_OWNER_PASSWORD}@postgres:5432/${APP_DB_NAME}
+    networks:
+      - database
+    depends_on:
+      postgres:
+        condition: service_healthy
+    read_only: true
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,size=32m
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    pids_limit: 64
+    restart: "no"
+    logging: *bounded-logs
+
+  seed-catalog:
+    image: unified-learning-api:local
+    build:
+      context: .
+      dockerfile: Dockerfile
+      args: *python-build-args
+    profiles: ["ops"]
+    command: ["flask", "--app", "unified_system.app:create_app", "seed-catalog"]
+    environment:
+      <<: *runtime-env
+      DATABASE_URL: postgresql+psycopg://${APP_DB_USER}:${APP_DB_PASSWORD}@postgres:5432/${APP_DB_NAME}
+    networks:
+      - database
+    depends_on:
+      postgres:
+        condition: service_healthy
+    read_only: true
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,size=32m
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    pids_limit: 64
+    restart: "no"
+    logging: *bounded-logs
+
+  worker-chaoxing:
+    image: unified-learning-worker:local
+    build:
+      context: .
+      dockerfile: workers/Dockerfile
+      args: *python-build-args
+    profiles: ["worker-chaoxing"]
+    restart: unless-stopped
+    environment:
+      WORKER_PLATFORM: chaoxing
+      WORKER_ID: ${WORKER_ID_CHAOXING:-chaoxing-worker-01}
+      BACKEND_INTERNAL_URL: http://backend:8088
+      WORKER_TOKEN_CHAOXING: ${WORKER_TOKEN_CHAOXING:-}
+      WORKER_ADAPTER_FACTORY: ${WORKER_ADAPTER_FACTORY_CHAOXING:-}
+      WORKER_POLL_INTERVAL_SECONDS: ${WORKER_POLL_INTERVAL_SECONDS:-2}
+      WORKER_HEARTBEAT_INTERVAL_SECONDS: ${WORKER_HEARTBEAT_INTERVAL_SECONDS:-15}
+      WORKER_REQUEST_TIMEOUT_SECONDS: ${WORKER_REQUEST_TIMEOUT_SECONDS:-10}
+      WORKER_CANCEL_GRACE_SECONDS: ${WORKER_CANCEL_GRACE_SECONDS:-5}
+    networks:
+      - worker_backend
+    depends_on:
+      backend:
+        condition: service_healthy
+    read_only: true
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,size=32m
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    pids_limit: 64
+    stop_grace_period: 20s
+    deploy:
+      resources:
+        limits:
+          cpus: "0.50"
+          memory: 512M
+    logging: *bounded-logs
+
+  worker-zhihuishu:
+    image: unified-learning-worker:local
+    build:
+      context: .
+      dockerfile: workers/Dockerfile
+      args: *python-build-args
+    profiles: ["worker-zhihuishu"]
+    restart: unless-stopped
+    environment:
+      WORKER_PLATFORM: zhihuishu
+      WORKER_ID: ${WORKER_ID_ZHIHUISU:-zhihuishu-worker-01}
+      BACKEND_INTERNAL_URL: http://backend:8088
+      WORKER_TOKEN_ZHIHUISU: ${WORKER_TOKEN_ZHIHUISU:-}
+      WORKER_ADAPTER_FACTORY: ${WORKER_ADAPTER_FACTORY_ZHIHUISU:-}
+      WORKER_POLL_INTERVAL_SECONDS: ${WORKER_POLL_INTERVAL_SECONDS:-2}
+      WORKER_HEARTBEAT_INTERVAL_SECONDS: ${WORKER_HEARTBEAT_INTERVAL_SECONDS:-15}
+      WORKER_REQUEST_TIMEOUT_SECONDS: ${WORKER_REQUEST_TIMEOUT_SECONDS:-10}
+      WORKER_CANCEL_GRACE_SECONDS: ${WORKER_CANCEL_GRACE_SECONDS:-5}
+    networks:
+      - worker_backend
+    depends_on:
+      backend:
+        condition: service_healthy
+    read_only: true
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,size=32m
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    pids_limit: 64
+    stop_grace_period: 20s
+    deploy:
+      resources:
+        limits:
+          cpus: "0.50"
+          memory: 512M
+    logging: *bounded-logs
+
+  worker-yinghua:
+    image: unified-learning-worker:local
+    build:
+      context: .
+      dockerfile: workers/Dockerfile
+      args: *python-build-args
+    profiles: ["worker-yinghua"]
+    restart: unless-stopped
+    environment:
+      WORKER_PLATFORM: yinghua
+      WORKER_ID: ${WORKER_ID_YINGHUA:-yinghua-worker-01}
+      BACKEND_INTERNAL_URL: http://backend:8088
+      WORKER_TOKEN_YINGHUA: ${WORKER_TOKEN_YINGHUA:-}
+      WORKER_ADAPTER_FACTORY: ${WORKER_ADAPTER_FACTORY_YINGHUA:-}
+      WORKER_POLL_INTERVAL_SECONDS: ${WORKER_POLL_INTERVAL_SECONDS:-2}
+      WORKER_HEARTBEAT_INTERVAL_SECONDS: ${WORKER_HEARTBEAT_INTERVAL_SECONDS:-15}
+      WORKER_REQUEST_TIMEOUT_SECONDS: ${WORKER_REQUEST_TIMEOUT_SECONDS:-10}
+      WORKER_CANCEL_GRACE_SECONDS: ${WORKER_CANCEL_GRACE_SECONDS:-5}
+    networks:
+      - worker_backend
+    depends_on:
+      backend:
+        condition: service_healthy
+    read_only: true
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,size=32m
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    pids_limit: 64
+    stop_grace_period: 20s
+    deploy:
+      resources:
+        limits:
+          cpus: "0.50"
+          memory: 512M
+    logging: *bounded-logs
+
+volumes:
+  postgres_data:
+
+networks:
+  web_backend:
+    internal: true
+  worker_backend:
+    internal: true
+  database:
+    internal: true

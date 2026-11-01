@@ -32,7 +32,11 @@ Vite listens on `0.0.0.0:5173`. Browser requests use the relative `/api/v1` path
 
 ### Optional Docker development stack
 
-`docker-compose.dev.yml` starts PostgreSQL, the Flask API, and Vite on localhost-only ports (`8088`, `5173`). It uses `flask init-db` for a disposable development schema and is not a production deployment/migration workflow. No platform Worker service is included until a concrete, verified adapter exists. Docker was not installed in the implementation environment, so this Compose file has not been built or run here.
+`docker-compose.dev.yml` starts PostgreSQL, the Flask API, and Vite on localhost-only ports (`8088`, `5173`). It uses `flask init-db` for a disposable development schema and is not a production deployment/migration workflow. Docker was not installed in the implementation environment, so this development Compose file has not been built or run here.
+
+### Production preparation (not yet deployed)
+
+`docker-compose.prod.yml`, production Dockerfiles, Postgres role initialization, host Nginx templates, backup/restore scripts, and a server preflight are documented in [`docs/phase6a-deployment.md`](../docs/phase6a-deployment.md). The Compose edge port is bound to loopback only; the worker profiles are disabled by default. This environment has no Docker/Compose or PostgreSQL runtime, and no production image, container, migration, backup, or restore drill has been run. Do not expose the stack publicly until the target-host checks, key-rotation blockers, and PostgreSQL validation are complete.
 
 Windows PowerShell (first-time administrator bootstrap):
 
@@ -73,6 +77,6 @@ A fresh SQLite database has been tested through `upgrade head` at `0004_account_
 ## Current capability boundary
 
 - **Implemented:** invitation-based registration, login, role and scoped-admin APIs, session revocation, personal/shared account management, encrypted credential submission, authorized shared-account visibility, users/invitations/audit management, live dashboard aggregates, platform/Worker status, a lease-validated minimal per-account course catalog cache/read API, and a course-data page.
-- **Not integrated:** real Chaoxing/Zhihuishu/Yinghua authentication or execution Worker, live credential-validation tests for either account mode, verified capability registration/admin activation, system announcements, email delivery, AI provider, Redis queue, Docker Compose production, Nginx/HTTPS, PostgreSQL migration/backup drills.
+- **Not verified/integrated:** real Chaoxing/Zhihuishu/Yinghua authentication or execution Worker, live credential-validation tests for either account mode, verified capability registration/admin activation, system announcements, email delivery, AI Provider management/API, Redis queue. A production Docker Compose/Nginx/backup plan is prepared but not built, started, publicly exposed, or recovery-tested. PostgreSQL migration/runtime/concurrency validation remains outstanding.
 - All platform catalog states remain `pending`; accounts remain `unverified` until a real verification adapter exists. The Phase 4 Worker runtime and course cache are foundation code only; actual platform tasks remain unavailable until a concrete adapter is verified.
 - The legacy repository contains an old committed AI credential. This application neither reads nor reuses that configuration; supplier-side revocation/rotation remains an operator action.

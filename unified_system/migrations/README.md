@@ -10,4 +10,4 @@ alembic -c unified_system/alembic.ini upgrade head
 
 `flask init-db` is a local development convenience only and should not manage an existing database. The PostgreSQL SQL snapshot is generated from ORM metadata for review; Alembic remains the migration source of truth.
 
-Validation performed in this stage: fresh SQLite `upgrade head`, `downgrade base`, then `upgrade head` all passed. A real PostgreSQL migration/concurrency test remains a deployment-stage requirement.
+Validation performed in this stage: fresh SQLite `upgrade head`, `downgrade base`, then `upgrade head` all passed. A real PostgreSQL migration/concurrency test remains a deployment-stage requirement. Phase 6A adds a disposable-database runner at `unified_system/deploy/test-postgresql.sh`; it requires two separately named `*_test` databases and an explicit destructive-test confirmation, and has not been executed in the Arena sandbox. Production upgrade/seed order and rollback precautions are in [`docs/phase6a-deployment.md`](../../docs/phase6a-deployment.md).

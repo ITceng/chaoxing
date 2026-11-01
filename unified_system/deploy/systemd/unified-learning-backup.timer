@@ -1,0 +1,11 @@
+[Unit]
+Description=Daily encrypted PostgreSQL backup for the unified learning system
+
+[Timer]
+OnCalendar=*-*-* 03:15:00
+RandomizedDelaySec=15m
+Persistent=true
+Unit=unified-learning-backup.service
+
+[Install]
+WantedBy=timers.target

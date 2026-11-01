@@ -1,6 +1,6 @@
 # 英华接入阻塞报告
 
-核查基线：分支 `arena/bd5e1acd-chaoxing`，原始工作树 HEAD `af955617c64141f039ae7b8b324d15566c7548a3`；核查日期 2026-11-01。没有切换分支或执行平台程序。
+核查基线：分支 `arena/bd5e1acd-chaoxing`，原始工作树 HEAD `af955617c64141f039ae7b8b324d15566c7548a3`；核查日期 2026-11-01。没有切换分支或执行平台程序。后续收到外部提交 `ba8f519b4888bf543e751cdc5bfe4f311ef3bb4c` 后，已对其中的 Go 代码做只读审计；该源码仍不符合接入条件。见 [`phase6a-yinghua-go-audit.md`](phase6a-yinghua-go-audit.md)。
 
 ## 已核实
 

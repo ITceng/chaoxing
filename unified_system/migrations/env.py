@@ -36,7 +36,9 @@ def run_migrations_online() -> None:
     database_url = make_url(section["sqlalchemy.url"])
     if database_url.get_backend_name() == "sqlite" and database_url.database not in (None, "", ":memory:"):
         Path(database_url.database).expanduser().resolve().parent.mkdir(parents=True, exist_ok=True)
-    connectable = engine_from_config(section, prefix="sqlalchemy.", poolclass=pool.NullPool)
+    connectable = engine_from_config(
+        section, prefix="sqlalchemy.", poolclass=pool.NullPool, hide_parameters=True,
+    )
     with connectable.connect() as connection:
         context.configure(connection=connection, target_metadata=target_metadata, compare_type=True)
         with context.begin_transaction():

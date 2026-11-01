@@ -1,0 +1,8 @@
+.env.production
+.env.production.*
+!.env.production.example
+secrets/
+backups/
+*.dump
+*.dump.age
+*.partial

@@ -4,7 +4,9 @@ import click
 from pathlib import Path
 from cryptography.fernet import Fernet
 from flask import Flask, jsonify, send_from_directory
-from sqlalchemy import select
+from sqlalchemy import select, text
+from sqlalchemy.exc import OperationalError, SQLAlchemyError, TimeoutError as SQLAlchemyTimeoutError
+from werkzeug.middleware.proxy_fix import ProxyFix
 
 from unified_system.api.admin import bp as admin_bp
 from unified_system.api.auth import bp as auth_bp
@@ -27,6 +29,16 @@ def create_app(test_config: dict | None = None) -> Flask:
     app.config.update(settings_from_env())
     if test_config:
         app.config.update(test_config)
+    proxy_hops = int(app.config.get("TRUSTED_PROXY_HOPS", 0))
+    if not 0 <= proxy_hops <= 2:
+        raise RuntimeError("TRUSTED_PROXY_HOPS must be between 0 and 2")
+    if proxy_hops:
+        app.wsgi_app = ProxyFix(
+            app.wsgi_app,
+            x_for=proxy_hops,
+            x_proto=proxy_hops,
+            x_host=proxy_hops,
+        )
     app.config.update(
         SESSION_COOKIE_NAME="unified_learning_session",
         SESSION_COOKIE_SECURE=app.config["COOKIE_SECURE"],
@@ -78,6 +90,16 @@ def create_app(test_config: dict | None = None) -> Flask:
     def health():
         return jsonify({"status": "ok", "service": "unified-learning-api", "version": "0.1.0"})
 
+    @app.get("/api/v1/health/ready")
+    def readiness():
+        try:
+            get_db().execute(text("SELECT 1"))
+        except SQLAlchemyError:
+            get_db().rollback()
+            app.logger.warning("readiness check failed: database unavailable")
+            return jsonify({"status": "not_ready", "checks": {"database": "unavailable"}}), 503
+        return jsonify({"status": "ready", "checks": {"database": "ok"}})
+
     @app.after_request
     def security_headers(response):
         response.headers.setdefault("X-Content-Type-Options", "nosniff")
@@ -97,9 +119,28 @@ def create_app(test_config: dict | None = None) -> Flask:
     def request_too_large(_error):
         return jsonify({"error": {"message": "Request body too large", "status": 413}}), 413
 
+    @app.errorhandler(SQLAlchemyError)
+    def database_error(error):
+        unavailable = isinstance(error, (OperationalError, SQLAlchemyTimeoutError)) or bool(
+            getattr(error, "connection_invalidated", False)
+        )
+        app.logger.error("database operation failed (%s)", type(error).__name__)
+        status = 503 if unavailable else 500
+        message = "Database temporarily unavailable" if unavailable else "Database operation failed"
+        return jsonify({"error": {"message": message, "status": status}}), status
+
+    @app.cli.command("seed-catalog")
+    def seed_catalog_command():
+        """Create or update the platform/role/permission catalog after Alembic migrations."""
+        with app.app_context():
+            seed_catalog()
+        click.echo("System role, permission, and platform catalog seeded.")
+
     @app.cli.command("init-db")
     def init_db_command():
         """Create the initial schema for local development and seed system catalog."""
+        if app.config.get("APP_ENV") == "production":
+            raise click.ClickException("init-db is disabled in production; use Alembic migrations.")
         Base.metadata.create_all(app.extensions["unified_engine"])
         with app.app_context():
             seed_catalog()

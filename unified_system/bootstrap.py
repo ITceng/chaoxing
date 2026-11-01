@@ -42,7 +42,7 @@ PLATFORM_CATALOG = [
     {
         "key": "yinghua", "name": "英华", "code_available": False,
         "integration_status": "pending", "auth_methods": [], "capabilities": [],
-        "status_note": "当前工作区没有 mooc-main；链接分支源码只展示 Yinghua 包且缺 go.mod，未通过 Linux 构建。",
+        "status_note": "外部提交 ba8f519 提供 Go 源码但缺 go.mod；静态审计发现自动学习进度写入和第三方验证码识别，不符合只读/用户处理验证边界。当前分支未集成、未构建、未验证。",
     },
 ]
 

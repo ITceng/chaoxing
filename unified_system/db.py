@@ -15,8 +15,15 @@ class Base(DeclarativeBase):
 
 def init_database(app) -> None:
     url = app.config["DATABASE_URL"]
-    options = {"pool_pre_ping": True, "future": True}
+    options = {"pool_pre_ping": True, "future": True, "hide_parameters": True}
     parsed_url = make_url(url)
+    if parsed_url.get_backend_name() != "sqlite":
+        options.update(
+            pool_size=int(app.config.get("DB_POOL_SIZE", 5)),
+            max_overflow=int(app.config.get("DB_MAX_OVERFLOW", 5)),
+            pool_timeout=int(app.config.get("DB_POOL_TIMEOUT_SECONDS", 30)),
+            pool_recycle=int(app.config.get("DB_POOL_RECYCLE_SECONDS", 1800)),
+        )
     if parsed_url.get_backend_name() == "sqlite" and parsed_url.database not in (None, "", ":memory:"):
         Path(parsed_url.database).expanduser().resolve().parent.mkdir(parents=True, exist_ok=True)
     if url.startswith("sqlite"):

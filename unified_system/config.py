@@ -4,6 +4,16 @@ import os
 from pathlib import Path
 
 
+def _bounded_int(name: str, default: int, minimum: int, maximum: int) -> int:
+    try:
+        value = int(os.environ.get(name, str(default)))
+    except (TypeError, ValueError) as exc:
+        raise RuntimeError(f"{name} must be an integer") from exc
+    if not minimum <= value <= maximum:
+        raise RuntimeError(f"{name} must be between {minimum} and {maximum}")
+    return value
+
+
 def settings_from_env() -> dict:
     app_env = os.environ.get("APP_ENV", "development").strip().lower()
     production = app_env == "production"
@@ -33,6 +43,11 @@ def settings_from_env() -> dict:
         "PERMANENT_SESSION_LIFETIME": 60 * 60 * 12,
         "MAX_CONTENT_LENGTH": 1024 * 1024,
         "CREDENTIAL_ENCRYPTION_KEY": os.environ.get("CREDENTIAL_ENCRYPTION_KEY", "").strip(),
+        "DB_POOL_SIZE": _bounded_int("DB_POOL_SIZE", 5, 1, 50),
+        "DB_MAX_OVERFLOW": _bounded_int("DB_MAX_OVERFLOW", 5, 0, 100),
+        "DB_POOL_TIMEOUT_SECONDS": _bounded_int("DB_POOL_TIMEOUT_SECONDS", 30, 1, 120),
+        "DB_POOL_RECYCLE_SECONDS": _bounded_int("DB_POOL_RECYCLE_SECONDS", 1800, 60, 86400),
+        "TRUSTED_PROXY_HOPS": _bounded_int("TRUSTED_PROXY_HOPS", 0, 0, 2),
         "BOOTSTRAP_ADMIN_EMAIL": os.environ.get("BOOTSTRAP_ADMIN_EMAIL", "").strip().lower(),
         "BOOTSTRAP_ADMIN_PASSWORD": os.environ.get("BOOTSTRAP_ADMIN_PASSWORD", ""),
         "LOGIN_FAILURE_LIMIT": int(os.environ.get("LOGIN_FAILURE_LIMIT", "5")),
