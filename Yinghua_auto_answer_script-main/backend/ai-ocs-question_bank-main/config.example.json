@@ -2,9 +2,9 @@
   "host": "0.0.0.0",
   "port": 5000,
   "provider": "sensenova",
-  "api_key": "sk-TpsVVm6WpEEqRcoQFtCE4yzyBT4qtWA3",
+  "api_key": "",
   "sensenova": {
-    "api_key": "sk-TpsVVm6WpEEqRcoQFtCE4yzyBT4qtWA3",
+    "api_key": "",
     "base_url": "https://token.sensenova.ai/v1/chat/completions",
     "model": "sensenova-6.8-flash-lite",
     "temperature": 0.1,
