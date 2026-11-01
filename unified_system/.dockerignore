@@ -10,8 +10,14 @@
 **/data/
 **/*.db
 **/node_modules/
-frontend/dist/
+frontend/
+tests/
+docs/
+deploy/
+postgres/
+Dockerfile.dev
+docker-compose*.yml
+requirements-test.txt
+requirements-prod.in
 **/coverage/
-deploy/backups/
-deploy/secrets/
 **/*.log

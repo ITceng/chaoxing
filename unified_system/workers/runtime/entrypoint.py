@@ -9,6 +9,7 @@ import sys
 from unified_system.platforms.common import HealthStatus, PlatformAdapter
 from unified_system.workers.runtime.client import WorkerClient
 from unified_system.workers.runtime.engine import WorkerEngine, run_forever
+from unified_system.workers.runtime.healthcheck import clear_health_marker
 from unified_system.workers.runtime.settings import WorkerSettings
 
 
@@ -25,6 +26,7 @@ def load_adapter(factory_path: str) -> PlatformAdapter:
 
 def main() -> int:
     logging.basicConfig(level=os.environ.get("LOG_LEVEL", "INFO").upper(), format="%(asctime)s %(levelname)s %(name)s %(message)s")
+    clear_health_marker()
     try:
         settings = WorkerSettings.from_env()
         factory_path = os.environ.get("WORKER_ADAPTER_FACTORY", "").strip()

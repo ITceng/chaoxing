@@ -99,6 +99,16 @@ def test_proxy_hop_count_out_of_range_fails_closed(tmp_path):
         })
 
 
+def test_zhihuishu_backend_token_uses_the_platform_key_environment_name(monkeypatch):
+    token = "zhihuishu-backend-token-with-at-least-32-characters"
+    monkeypatch.setenv("APP_ENV", "development")
+    monkeypatch.setenv("WORKER_TOKEN_CHAOXING", "")
+    monkeypatch.setenv("WORKER_TOKEN_ZHIHUISHU", token)
+    monkeypatch.setenv("WORKER_TOKEN_YINGHUA", "")
+    config = settings_from_env()
+    assert config["WORKER_TOKENS"]["zhihuishu"] == token
+
+
 def test_production_pool_settings_are_bounded(monkeypatch):
     monkeypatch.setenv("APP_ENV", "production")
     monkeypatch.setenv("APP_SECRET_KEY", "s" * 48)

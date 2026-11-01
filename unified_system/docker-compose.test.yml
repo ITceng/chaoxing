@@ -1,0 +1,22 @@
+# Test-only overlay: use test-specific image tags and publish the disposable PostgreSQL service
+# on loopback so the guarded host-side Alembic/concurrency runner can connect. Never combine this
+# file with production data.
+services:
+  postgres:
+    ports:
+      - "127.0.0.1:${TEST_POSTGRES_PORT:-55432}:5432"
+
+  backend:
+    image: unified-learning-api:phase6b-test
+  migrate:
+    image: unified-learning-api:phase6b-test
+  seed-catalog:
+    image: unified-learning-api:phase6b-test
+  edge:
+    image: unified-learning-edge:phase6b-test
+  worker-chaoxing:
+    image: unified-learning-worker-chaoxing:phase6b-test
+  worker-zhihuishu:
+    image: unified-learning-worker-zhihuishu:phase6b-test
+  worker-yinghua:
+    image: unified-learning-worker-yinghua:phase6b-test

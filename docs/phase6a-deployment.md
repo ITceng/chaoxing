@@ -24,7 +24,7 @@ Internet
                          |
                          +--> Flask/Gunicorn backend (private Compose networks)
                                  |-- private database network --> PostgreSQL 16 + persistent volume
-                                 |-- private Worker network ----> optional platform Worker services
+                                 |-- per-platform private networks --> optional isolated Worker services
                                  `-- no general Internet egress by default
 
 Optional Worker profile --> private backend network only (external platform egress is intentionally not configured)
@@ -36,15 +36,15 @@ Redis: deliberately omitted. The persistent PostgreSQL task queue remains author
 
 - Only the edge container has a host port mapping, and it is explicitly bound to `127.0.0.1:${EDGE_PORT:-8080}`. Host Nginx is the future HTTPS/public boundary; it has **not** been installed or enabled here.
 - PostgreSQL, backend, and Workers have no published host ports. PostgreSQL is attached only to an internal database network. No Redis service is defined.
-- Separate internal networks are prepared for browser-edge/backend, Worker/backend, and backend/database. No general egress bridge is attached to the backend or Workers; the database and application services therefore have no default Internet egress. Workers do not share the database network. A reviewed, destination-restricted egress policy must be added before any verified platform adapter or external AI Provider is activated.
+- Separate internal networks are prepared for browser-edge/backend, backend/database, and one backend/Worker network per platform. Workers cannot directly reach another platform's Worker container and never share the database network. No general egress bridge is attached to the backend or Workers; services have no default Internet egress. A reviewed, destination-restricted egress policy must be added before any verified platform adapter or external AI Provider is activated.
 - Both host Nginx and edge Nginx return 404 for `/api/internal/workers` and `/api/internal/workers/*`. Workers connect directly to the backend service name over the private Compose network, never through Nginx.
 - Each platform Worker is a separate Compose service/profile and can be restarted independently once a verified adapter exists. All profiles are disabled by default; starting one now fails closed because no approved adapter factory/token is configured.
-- CPU/memory limits, process limits, restart policies, health probes where an honest probe exists, non-root backend/edge/Worker users, read-only container roots, `no-new-privileges`, tmpfs scratch paths and bounded Docker JSON logs are configured. Worker health is monitored using persisted Worker heartbeat state; no fake container health endpoint is added.
+- CPU/memory limits, process limits, restart policies, non-root backend/edge/Worker users, read-only container roots, `no-new-privileges`, tmpfs scratch paths and bounded Docker JSON logs are configured. Worker images include an honest healthcheck based on a fresh successful private-backend heartbeat; persisted Worker state remains authoritative.
 
 ## 3. Deployment files
 
 - `unified_system/Dockerfile` — multi-stage Python 3.12 backend image, exact Python package version lock, non-root Gunicorn runtime and DB-aware readiness probe.
-- `unified_system/frontend/Dockerfile` — multi-stage Vue build and unprivileged Nginx static/API edge image.
+- `unified_system/frontend/Dockerfile` — multi-stage Vue build and unprivileged Nginx static/API edge image. Public API base path is a non-secret `VITE_API_BASE_URL` build arg, defaults to same-origin `/api/v1`, and is supplied by the production env template; no API credential enters the frontend build.
 - `unified_system/workers/Dockerfile` — multi-stage Python 3.12 generic Worker runtime, non-root and fail-closed adapter factory.
 - `unified_system/docker-compose.prod.yml` — production service/network/volume/resource/restart/logging profile definitions.
 - `unified_system/frontend/nginx/nginx.conf` — edge static serving, SPA fallback, API proxy, request-size limits and internal Worker-route denial.
@@ -222,7 +222,7 @@ A backup command is not a recovery test. No real dump, encryption, restore, perm
 ## 9. Logging, monitoring and safety checklist
 
 - Backend liveness: `GET /api/v1/health`; readiness performs `SELECT 1` at `GET /api/v1/health/ready`. The edge container has `/healthz`; PostgreSQL uses `pg_isready`.
-- Worker liveness is the persisted `WorkerInstance.last_seen_at` heartbeat; current Docker profiles do not fake a Worker health response.
+- Worker liveness is the persisted `WorkerInstance.last_seen_at` heartbeat. The Worker Docker healthcheck only passes after a fresh successful backend heartbeat (temporary marker in tmpfs); Docker marks stale Workers unhealthy but restart policies do not automatically restart an otherwise-running unhealthy process.
 - Host Nginx rate-limits login and general API traffic; the app also maintains login-failure limits. CORS remains disabled; browser/API are same-origin and state-changing routes require CSRF. Body size is capped at 1 MiB at Flask and both Nginx layers.
 - SQLAlchemy hides SQL parameters; DB error logs contain only the exception class. Gunicorn and Nginx access logs omit query strings and request bodies. No app/proxy log format includes passwords, Cookies, AI keys or Authorization headers.
 - Container stdout/stderr uses Docker `json-file` rotation (`10m` × 5 files). Host Nginx logs use the provided daily/14-file logrotate policy. Monitor `docker compose ps`, Worker heartbeat status, disk usage (`health-report.sh`) and host log/disk alerts; external alerting/metrics collection is not included.
@@ -258,4 +258,4 @@ A backup command is not a recovery test. No real dump, encryption, restore, perm
 5. PostgreSQL live migration/concurrency testing and backup/restore drill.
 6. Target Ubuntu preflight, immutable image digest selection, Docker/Nginx build/start validation, monitoring/alerting and public HTTPS readiness.
 
-Phase 6A stops here. Do not open the stack to the Internet or move to a later phase until blockers are explicitly resolved and authorized.
+Phase 6A handoff ends here. Phase 6B's container review and remaining validation gates are tracked separately in [`phase6b-container-validation.md`](phase6b-container-validation.md). Do not open the stack to the Internet, activate a Worker, or claim production readiness until those blockers are explicitly resolved and authorized.

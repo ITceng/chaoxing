@@ -20,6 +20,7 @@ from unified_system.platforms.common import (
 from unified_system.tests.test_accounts_workers import create_shared, grant, post, sign_in
 from unified_system.tests.test_isolation import create_account
 from unified_system.workers.runtime import WorkerClient, WorkerEngine, WorkerSettings
+from unified_system.workers.runtime.client import WorkerProtocolError
 from unified_system.workers.runtime.engine import run_forever
 
 
@@ -296,6 +297,18 @@ def test_registry_does_not_overwrite_existing_platform_adapters():
         registry.get("yinghua")
 
 
+def test_zhihuishu_worker_settings_use_the_platform_key_environment_name():
+    token = "zhihuishu-worker-token-with-at-least-32-chars"
+    settings = WorkerSettings.from_env({
+        "WORKER_PLATFORM": "zhihuishu",
+        "WORKER_ID": "zhihuishu-1",
+        "WORKER_TOKEN_ZHIHUISHU": token,
+        "BACKEND_INTERNAL_URL": "http://backend:8088",
+    })
+    assert settings.token == token
+    assert token not in repr(settings)
+
+
 def test_worker_settings_redact_token_and_reject_insecure_remote_url():
     env = {
         "WORKER_PLATFORM": "chaoxing", "WORKER_ID": "cx-1",
@@ -354,6 +367,29 @@ def test_worker_authentication_can_bind_token_to_worker_identity_without_breakin
     })
     assert wrong_token.status_code == wrong_identity.status_code == 401
     assert accepted.status_code == 200
+
+
+def test_worker_engine_records_health_only_after_backend_heartbeat_succeeds(tmp_path, monkeypatch):
+    marker = tmp_path / "worker-health"
+    monkeypatch.setenv("WORKER_HEALTH_FILE", str(marker))
+    engine = WorkerEngine(FakeClient(worker_settings(), None), FakeAdapter())
+    assert engine.run_once() is False
+    assert marker.is_file()
+
+
+def test_worker_engine_does_not_record_health_when_backend_heartbeat_fails(tmp_path, monkeypatch):
+    marker = tmp_path / "worker-health"
+    monkeypatch.setenv("WORKER_HEALTH_FILE", str(marker))
+    client = FakeClient(worker_settings(), None)
+
+    def fail_heartbeat(_capabilities):
+        raise WorkerProtocolError("backend_unavailable")
+
+    client.heartbeat = fail_heartbeat
+    engine = WorkerEngine(client, FakeAdapter())
+    with pytest.raises(WorkerProtocolError):
+        engine.run_once()
+    assert not marker.exists()
 
 
 def test_worker_engine_completes_only_read_only_task_with_compact_summary():

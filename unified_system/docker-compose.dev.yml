@@ -25,7 +25,7 @@ services:
       COOKIE_SECURE: "0"
       CREDENTIAL_ENCRYPTION_KEY: ${CREDENTIAL_ENCRYPTION_KEY:-}
       WORKER_TOKEN_CHAOXING: ${WORKER_TOKEN_CHAOXING:-}
-      WORKER_TOKEN_ZHIHUISU: ${WORKER_TOKEN_ZHIHUISU:-}
+      WORKER_TOKEN_ZHIHUISHU: ${WORKER_TOKEN_ZHIHUISHU:-}
       WORKER_TOKEN_YINGHUA: ${WORKER_TOKEN_YINGHUA:-}
     command: ["sh", "-lc", "flask --app unified_system.app:create_app init-db && flask --app unified_system.app:create_app run --host 0.0.0.0 --port 8088"]
     volumes:
@@ -43,8 +43,8 @@ services:
 
   frontend:
     build:
-      context: .
-      dockerfile: frontend/Dockerfile.dev
+      context: ./frontend
+      dockerfile: Dockerfile.dev
     environment:
       VITE_API_BASE_URL: /api/v1
       VITE_API_PROXY_TARGET: http://backend:8088

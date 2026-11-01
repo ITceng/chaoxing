@@ -2,6 +2,8 @@ ARG NODE_BASE=node:20-alpine
 ARG NGINX_BASE=nginx:alpine
 FROM ${NODE_BASE} AS build
 
+ARG VITE_API_BASE_URL=/api/v1
+ENV VITE_API_BASE_URL=${VITE_API_BASE_URL}
 WORKDIR /workspace/frontend
 COPY package.json package-lock.json ./
 RUN npm ci

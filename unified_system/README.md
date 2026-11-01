@@ -36,7 +36,7 @@ Vite listens on `0.0.0.0:5173`. Browser requests use the relative `/api/v1` path
 
 ### Production preparation (not yet deployed)
 
-`docker-compose.prod.yml`, production Dockerfiles, Postgres role initialization, host Nginx templates, backup/restore scripts, and a server preflight are documented in [`docs/phase6a-deployment.md`](../docs/phase6a-deployment.md). The Compose edge port is bound to loopback only; the worker profiles are disabled by default. This environment has no Docker/Compose or PostgreSQL runtime, and no production image, container, migration, backup, or restore drill has been run. Do not expose the stack publicly until the target-host checks, key-rotation blockers, and PostgreSQL validation are complete.
+`docker-compose.prod.yml`, production Dockerfiles, Postgres role initialization, host Nginx templates, backup/restore scripts, and a server preflight are documented in [`docs/phase6a-deployment.md`](../docs/phase6a-deployment.md). Phase 6B build-context corrections, internal per-platform networks, egress design and explicit validation commands are in [`docs/phase6b-container-validation.md`](../docs/phase6b-container-validation.md). The Compose edge port is bound to loopback only; Worker profiles remain disabled, and no egress gateway is configured. This environment has no Docker/Compose or PostgreSQL runtime, so no production image/container or PostgreSQL integration run has been completed. Do not expose the stack publicly until target-host, key-rotation and PostgreSQL checks are complete.
 
 Windows PowerShell (first-time administrator bootstrap):
 

@@ -9,6 +9,7 @@ from typing import Any
 
 from unified_system.platforms.common import AdapterCancelled, AdapterError, AuthContext, CancellationToken, CourseSummary, HealthStatus, WorkerTask
 from unified_system.workers.runtime.client import WorkerClient, WorkerProtocolError
+from unified_system.workers.runtime.healthcheck import record_backend_heartbeat
 
 
 logger = logging.getLogger("unified_system.worker")
@@ -34,6 +35,7 @@ class WorkerEngine:
         if not isinstance(health, HealthStatus) or not health.healthy:
             raise AdapterError("adapter_unhealthy", "Platform adapter health check failed")
         self.client.heartbeat(sorted(self.task_kinds))
+        record_backend_heartbeat()
         envelope = self.client.claim()
         if envelope is None:
             return False
@@ -102,7 +104,9 @@ class WorkerEngine:
                 cancel_at = cancel_at or now
             if now - last_heartbeat >= self.client.settings.heartbeat_interval_seconds:
                 try:
-                    if self.client.task_heartbeat(task_id, lease_token):
+                    cancel_requested = self.client.task_heartbeat(task_id, lease_token)
+                    record_backend_heartbeat()
+                    if cancel_requested:
                         cancellation.cancel()
                         cancel_at = cancel_at or now
                 except WorkerProtocolError:

@@ -12,6 +12,7 @@ x-python-build-args: &python-build-args
 x-frontend-build-args: &frontend-build-args
   NODE_BASE: ${NODE_BASE:-node:20-alpine}
   NGINX_BASE: ${NGINX_BASE:-nginx:alpine}
+  VITE_API_BASE_URL: ${VITE_API_BASE_URL:-/api/v1}
 
 x-runtime-env: &runtime-env
   APP_ENV: production
@@ -27,7 +28,7 @@ x-runtime-env: &runtime-env
   WORKER_LEASE_TTL_SECONDS: ${WORKER_LEASE_TTL_SECONDS:-60}
   WORKER_HEARTBEAT_TTL_SECONDS: ${WORKER_HEARTBEAT_TTL_SECONDS:-90}
   WORKER_TOKEN_CHAOXING: ${WORKER_TOKEN_CHAOXING:-}
-  WORKER_TOKEN_ZHIHUISU: ${WORKER_TOKEN_ZHIHUISU:-}
+  WORKER_TOKEN_ZHIHUISHU: ${WORKER_TOKEN_ZHIHUISHU:-}
   WORKER_TOKEN_YINGHUA: ${WORKER_TOKEN_YINGHUA:-}
 
 services:
@@ -80,9 +81,16 @@ services:
     environment:
       <<: *runtime-env
       DATABASE_URL: postgresql+psycopg://${APP_DB_USER}:${APP_DB_PASSWORD}@postgres:5432/${APP_DB_NAME}
+      HTTPS_PROXY: ${AI_HTTPS_PROXY:-}
+      https_proxy: ${AI_HTTPS_PROXY:-}
+      NO_PROXY: postgres,backend,localhost,127.0.0.1,::1
+      no_proxy: postgres,backend,localhost,127.0.0.1,::1
     networks:
+      - ai_proxy
       - web_backend
-      - worker_backend
+      - worker_chaoxing_backend
+      - worker_zhihuishu_backend
+      - worker_yinghua_backend
       - database
     depends_on:
       postgres:
@@ -168,6 +176,11 @@ services:
       - ALL
     pids_limit: 64
     restart: "no"
+    deploy:
+      resources:
+        limits:
+          cpus: "0.50"
+          memory: 256M
     logging: *bounded-logs
 
   seed-catalog:
@@ -179,13 +192,18 @@ services:
     profiles: ["ops"]
     command: ["flask", "--app", "unified_system.app:create_app", "seed-catalog"]
     environment:
-      <<: *runtime-env
+      APP_ENV: production
+      APP_SECRET_KEY: ${APP_SECRET_KEY:?Set APP_SECRET_KEY in .env.production}
+      CREDENTIAL_ENCRYPTION_KEY: ${CREDENTIAL_ENCRYPTION_KEY:?Set CREDENTIAL_ENCRYPTION_KEY in .env.production}
+      DATA_DIR: /tmp/unified
       DATABASE_URL: postgresql+psycopg://${APP_DB_USER}:${APP_DB_PASSWORD}@postgres:5432/${APP_DB_NAME}
     networks:
       - database
     depends_on:
       postgres:
         condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
     read_only: true
     tmpfs:
       - /tmp:rw,noexec,nosuid,size=32m
@@ -195,14 +213,21 @@ services:
       - ALL
     pids_limit: 64
     restart: "no"
+    deploy:
+      resources:
+        limits:
+          cpus: "0.50"
+          memory: 256M
     logging: *bounded-logs
 
   worker-chaoxing:
-    image: unified-learning-worker:local
+    image: unified-learning-worker-chaoxing:local
     build:
       context: .
       dockerfile: workers/Dockerfile
-      args: *python-build-args
+      args:
+        <<: *python-build-args
+        WORKER_PLATFORM: chaoxing
     profiles: ["worker-chaoxing"]
     restart: unless-stopped
     environment:
@@ -211,12 +236,19 @@ services:
       BACKEND_INTERNAL_URL: http://backend:8088
       WORKER_TOKEN_CHAOXING: ${WORKER_TOKEN_CHAOXING:-}
       WORKER_ADAPTER_FACTORY: ${WORKER_ADAPTER_FACTORY_CHAOXING:-}
+      WORKER_HEALTH_FILE: /tmp/worker-health
+      HTTPS_PROXY: ${WORKER_CHAOXING_HTTPS_PROXY:-}
+      https_proxy: ${WORKER_CHAOXING_HTTPS_PROXY:-}
+      NO_PROXY: backend,localhost,127.0.0.1,::1
+      no_proxy: backend,localhost,127.0.0.1,::1
+      WORKER_HEARTBEAT_TTL_SECONDS: ${WORKER_HEARTBEAT_TTL_SECONDS:-90}
       WORKER_POLL_INTERVAL_SECONDS: ${WORKER_POLL_INTERVAL_SECONDS:-2}
       WORKER_HEARTBEAT_INTERVAL_SECONDS: ${WORKER_HEARTBEAT_INTERVAL_SECONDS:-15}
       WORKER_REQUEST_TIMEOUT_SECONDS: ${WORKER_REQUEST_TIMEOUT_SECONDS:-10}
       WORKER_CANCEL_GRACE_SECONDS: ${WORKER_CANCEL_GRACE_SECONDS:-5}
     networks:
-      - worker_backend
+      - worker_chaoxing_backend
+      - worker_chaoxing_proxy
     depends_on:
       backend:
         condition: service_healthy
@@ -237,25 +269,34 @@ services:
     logging: *bounded-logs
 
   worker-zhihuishu:
-    image: unified-learning-worker:local
+    image: unified-learning-worker-zhihuishu:local
     build:
       context: .
       dockerfile: workers/Dockerfile
-      args: *python-build-args
+      args:
+        <<: *python-build-args
+        WORKER_PLATFORM: zhihuishu
     profiles: ["worker-zhihuishu"]
     restart: unless-stopped
     environment:
       WORKER_PLATFORM: zhihuishu
-      WORKER_ID: ${WORKER_ID_ZHIHUISU:-zhihuishu-worker-01}
+      WORKER_ID: ${WORKER_ID_ZHIHUISHU:-zhihuishu-worker-01}
       BACKEND_INTERNAL_URL: http://backend:8088
-      WORKER_TOKEN_ZHIHUISU: ${WORKER_TOKEN_ZHIHUISU:-}
-      WORKER_ADAPTER_FACTORY: ${WORKER_ADAPTER_FACTORY_ZHIHUISU:-}
+      WORKER_TOKEN_ZHIHUISHU: ${WORKER_TOKEN_ZHIHUISHU:-}
+      WORKER_ADAPTER_FACTORY: ${WORKER_ADAPTER_FACTORY_ZHIHUISHU:-}
+      WORKER_HEALTH_FILE: /tmp/worker-health
+      HTTPS_PROXY: ${WORKER_ZHIHUISHU_HTTPS_PROXY:-}
+      https_proxy: ${WORKER_ZHIHUISHU_HTTPS_PROXY:-}
+      NO_PROXY: backend,localhost,127.0.0.1,::1
+      no_proxy: backend,localhost,127.0.0.1,::1
+      WORKER_HEARTBEAT_TTL_SECONDS: ${WORKER_HEARTBEAT_TTL_SECONDS:-90}
       WORKER_POLL_INTERVAL_SECONDS: ${WORKER_POLL_INTERVAL_SECONDS:-2}
       WORKER_HEARTBEAT_INTERVAL_SECONDS: ${WORKER_HEARTBEAT_INTERVAL_SECONDS:-15}
       WORKER_REQUEST_TIMEOUT_SECONDS: ${WORKER_REQUEST_TIMEOUT_SECONDS:-10}
       WORKER_CANCEL_GRACE_SECONDS: ${WORKER_CANCEL_GRACE_SECONDS:-5}
     networks:
-      - worker_backend
+      - worker_zhihuishu_backend
+      - worker_zhihuishu_proxy
     depends_on:
       backend:
         condition: service_healthy
@@ -276,11 +317,13 @@ services:
     logging: *bounded-logs
 
   worker-yinghua:
-    image: unified-learning-worker:local
+    image: unified-learning-worker-yinghua:local
     build:
       context: .
       dockerfile: workers/Dockerfile
-      args: *python-build-args
+      args:
+        <<: *python-build-args
+        WORKER_PLATFORM: yinghua
     profiles: ["worker-yinghua"]
     restart: unless-stopped
     environment:
@@ -289,12 +332,19 @@ services:
       BACKEND_INTERNAL_URL: http://backend:8088
       WORKER_TOKEN_YINGHUA: ${WORKER_TOKEN_YINGHUA:-}
       WORKER_ADAPTER_FACTORY: ${WORKER_ADAPTER_FACTORY_YINGHUA:-}
+      WORKER_HEALTH_FILE: /tmp/worker-health
+      HTTPS_PROXY: ${WORKER_YINGHUA_HTTPS_PROXY:-}
+      https_proxy: ${WORKER_YINGHUA_HTTPS_PROXY:-}
+      NO_PROXY: backend,localhost,127.0.0.1,::1
+      no_proxy: backend,localhost,127.0.0.1,::1
+      WORKER_HEARTBEAT_TTL_SECONDS: ${WORKER_HEARTBEAT_TTL_SECONDS:-90}
       WORKER_POLL_INTERVAL_SECONDS: ${WORKER_POLL_INTERVAL_SECONDS:-2}
       WORKER_HEARTBEAT_INTERVAL_SECONDS: ${WORKER_HEARTBEAT_INTERVAL_SECONDS:-15}
       WORKER_REQUEST_TIMEOUT_SECONDS: ${WORKER_REQUEST_TIMEOUT_SECONDS:-10}
       WORKER_CANCEL_GRACE_SECONDS: ${WORKER_CANCEL_GRACE_SECONDS:-5}
     networks:
-      - worker_backend
+      - worker_yinghua_backend
+      - worker_yinghua_proxy
     depends_on:
       backend:
         condition: service_healthy
@@ -317,10 +367,24 @@ services:
 volumes:
   postgres_data:
 
+# These proxy-only networks are internal handoff points. No egress gateway is attached by default.
+# An authorized gateway must have a reviewed allowlist and be the only container attached to a public egress network.
 networks:
   web_backend:
     internal: true
-  worker_backend:
+  worker_chaoxing_backend:
+    internal: true
+  worker_zhihuishu_backend:
+    internal: true
+  worker_yinghua_backend:
+    internal: true
+  ai_proxy:
+    internal: true
+  worker_chaoxing_proxy:
+    internal: true
+  worker_zhihuishu_proxy:
+    internal: true
+  worker_yinghua_proxy:
     internal: true
   database:
     internal: true

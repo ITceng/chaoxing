@@ -9,6 +9,9 @@ RUN python -m pip install --require-hashes --prefix=/install -r requirements-pro
 
 FROM ${PYTHON_BASE} AS runtime
 
+ARG WORKER_PLATFORM=generic
+LABEL io.unified-learning.worker-platform="${WORKER_PLATFORM}"
+
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
     PYTHONPATH=/app
@@ -19,5 +22,8 @@ WORKDIR /app
 COPY --from=dependencies /install /usr/local
 COPY --chown=10001:10001 . /app/unified_system
 USER 10001:10001
+
+HEALTHCHECK --interval=20s --timeout=3s --start-period=45s --retries=3 \
+  CMD python -m unified_system.workers.runtime.healthcheck || exit 1
 
 CMD ["python", "-m", "unified_system.workers.runtime.entrypoint"]

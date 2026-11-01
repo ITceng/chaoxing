@@ -1,6 +1,8 @@
 .env.production
 .env.production.*
 !.env.production.example
+.env.phase6b
+.env.phase6b.*
 secrets/
 backups/
 *.dump

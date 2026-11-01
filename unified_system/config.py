@@ -58,7 +58,7 @@ def settings_from_env() -> dict:
         "WORKER_HEARTBEAT_TTL_SECONDS": int(os.environ.get("WORKER_HEARTBEAT_TTL_SECONDS", "90")),
         "WORKER_TOKENS": {
             "chaoxing": os.environ.get("WORKER_TOKEN_CHAOXING", ""),
-            "zhihuishu": os.environ.get("WORKER_TOKEN_ZHIHUISU", ""),
+            "zhihuishu": os.environ.get("WORKER_TOKEN_ZHIHUISHU", ""),
             "yinghua": os.environ.get("WORKER_TOKEN_YINGHUA", ""),
         },
     }
