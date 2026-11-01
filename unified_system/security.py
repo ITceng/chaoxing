@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import hmac
+import json
 import os
 import re
 import secrets
@@ -74,15 +75,50 @@ def mask_account_hint(value: str) -> str:
     return raw[:1] + "•••" + raw[-2:]
 
 
-def credential_cipher() -> Fernet:
-    cached = current_app.extensions.get("credential_cipher")
-    if cached is not None:
-        return cached
-    key = current_app.config.get("CREDENTIAL_ENCRYPTION_KEY", "")
-    if not key:
-        if current_app.config.get("APP_ENV") == "production":
-            raise RuntimeError("CREDENTIAL_ENCRYPTION_KEY must be supplied by a production secret manager")
-        data_dir = Path(current_app.config["DATA_DIR"])
+_CREDENTIAL_KEY_ID_RE = re.compile(r"^[A-Za-z0-9_-]{1,32}$")
+_CREDENTIAL_CIPHERTEXT_PREFIX = "v1:"
+
+
+def _parse_credential_keyring(config: dict, *, allow_development_fallback: bool) -> tuple[dict[str, Fernet], str]:
+    keys: dict[str, Fernet] = {}
+    serialized = str(config.get("CREDENTIAL_ENCRYPTION_KEYS_JSON", "") or "").strip()
+    if serialized:
+        if len(serialized) > 16384:
+            raise RuntimeError("CREDENTIAL_ENCRYPTION_KEYS_JSON exceeds the supported size")
+        try:
+            raw = json.loads(serialized)
+        except json.JSONDecodeError as exc:
+            raise RuntimeError("CREDENTIAL_ENCRYPTION_KEYS_JSON must be a JSON object") from exc
+        if not isinstance(raw, dict) or not 1 <= len(raw) <= 32:
+            raise RuntimeError("Credential keyring must contain between 1 and 32 key IDs")
+        for key_id, key_value in raw.items():
+            if not isinstance(key_id, str) or not _CREDENTIAL_KEY_ID_RE.fullmatch(key_id):
+                raise RuntimeError("Credential key IDs may contain only letters, digits, underscore or hyphen")
+            if not isinstance(key_value, str) or not key_value:
+                raise RuntimeError(f"Credential key {key_id!r} is empty or invalid")
+            try:
+                keys[key_id] = Fernet(key_value.encode("ascii"))
+            except (ValueError, TypeError, UnicodeEncodeError) as exc:
+                raise RuntimeError(f"Credential key {key_id!r} is not a valid Fernet key") from exc
+
+    legacy_key = str(config.get("CREDENTIAL_ENCRYPTION_KEY", "") or "").strip()
+    if legacy_key:
+        try:
+            legacy_cipher = Fernet(legacy_key.encode("ascii"))
+        except (ValueError, TypeError, UnicodeEncodeError) as exc:
+            raise RuntimeError("CREDENTIAL_ENCRYPTION_KEY is not a valid legacy Fernet key") from exc
+        if "legacy" in keys:
+            # Fernet tokens contain a timestamp/nonce, so compare by cross-decrypting a test token.
+            try:
+                keys["legacy"].decrypt(legacy_cipher.encrypt(b"key-check"))
+            except InvalidToken as exc:
+                raise RuntimeError("Keyring legacy key conflicts with CREDENTIAL_ENCRYPTION_KEY") from exc
+        else:
+            keys["legacy"] = legacy_cipher
+
+    active_id = str(config.get("CREDENTIAL_ENCRYPTION_ACTIVE_KEY_ID", "") or "").strip()
+    if not keys and allow_development_fallback and config.get("APP_ENV") != "production":
+        data_dir = Path(config["DATA_DIR"])
         data_dir.mkdir(mode=0o700, parents=True, exist_ok=True)
         path = data_dir / ".credential.key"
         try:
@@ -91,21 +127,75 @@ def credential_cipher() -> Fernet:
                 handle.write(Fernet.generate_key())
         except FileExistsError:
             pass
-        key = path.read_bytes().strip().decode("ascii")
-    cipher = Fernet(key.encode("ascii"))
-    current_app.extensions["credential_cipher"] = cipher
-    return cipher
+        try:
+            keys["legacy"] = Fernet(path.read_bytes().strip())
+        except (OSError, ValueError) as exc:
+            raise RuntimeError("Development credential key file is unavailable or invalid") from exc
+
+    if not keys:
+        raise RuntimeError("A credential-encryption keyring or legacy key must be supplied by a secret manager")
+    if not active_id:
+        if len(keys) == 1:
+            active_id = next(iter(keys))
+        else:
+            raise RuntimeError("Set CREDENTIAL_ENCRYPTION_ACTIVE_KEY_ID when multiple credential keys are configured")
+    if active_id not in keys:
+        raise RuntimeError("CREDENTIAL_ENCRYPTION_ACTIVE_KEY_ID is not present in the credential keyring")
+    return keys, active_id
+
+
+def validate_credential_keyring(config: dict) -> None:
+    """Validate configured production key material without creating or printing secrets."""
+    _parse_credential_keyring(config, allow_development_fallback=False)
+
+
+def credential_keyring() -> tuple[dict[str, Fernet], str]:
+    cached = current_app.extensions.get("credential_keyring")
+    if cached is None:
+        cached = _parse_credential_keyring(current_app.config, allow_development_fallback=True)
+        current_app.extensions["credential_keyring"] = cached
+    return cached
+
+
+def credential_cipher() -> Fernet:
+    keys, active_id = credential_keyring()
+    return keys[active_id]
 
 
 def encrypt_secret(value: str) -> str:
-    return credential_cipher().encrypt(value.encode("utf-8")).decode("ascii")
+    keys, active_id = credential_keyring()
+    token = keys[active_id].encrypt(value.encode("utf-8")).decode("ascii")
+    return f"{_CREDENTIAL_CIPHERTEXT_PREFIX}{active_id}:{token}"
+
+
+def encrypted_with_active_key(value: str) -> bool:
+    if not value.startswith(_CREDENTIAL_CIPHERTEXT_PREFIX):
+        return False
+    try:
+        _prefix, key_id, _token = value.split(":", 2)
+    except ValueError:
+        return False
+    _keys, active_id = credential_keyring()
+    return key_id == active_id
 
 
 def decrypt_secret(value: str) -> str:
+    keys, _active_id = credential_keyring()
     try:
-        return credential_cipher().decrypt(value.encode("ascii")).decode("utf-8")
-    except (InvalidToken, ValueError) as exc:
-        raise ValueError("credential could not be decrypted; verify the encryption key") from exc
+        if value.startswith(_CREDENTIAL_CIPHERTEXT_PREFIX):
+            _prefix, key_id, token = value.split(":", 2)
+            if not _CREDENTIAL_KEY_ID_RE.fullmatch(key_id) or key_id not in keys:
+                raise InvalidToken
+            cipher = keys[key_id]
+        else:
+            # Pre-versioned rows use the original CREDENTIAL_ENCRYPTION_KEY (key ID legacy).
+            cipher = keys.get("legacy")
+            token = value
+            if cipher is None:
+                raise InvalidToken
+        return cipher.decrypt(token.encode("ascii")).decode("utf-8")
+    except (InvalidToken, UnicodeEncodeError, ValueError) as exc:
+        raise ValueError("credential could not be decrypted; verify the versioned keyring") from exc
 
 
 def utcnow():

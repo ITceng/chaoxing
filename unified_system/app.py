@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import click
 from pathlib import Path
-from cryptography.fernet import Fernet
 from flask import Flask, jsonify, send_from_directory
 from sqlalchemy import select, text
 from sqlalchemy.exc import OperationalError, SQLAlchemyError, TimeoutError as SQLAlchemyTimeoutError
@@ -20,8 +19,11 @@ from unified_system.api.worker import bp as worker_bp
 from unified_system.bootstrap import seed_catalog
 from unified_system.config import settings_from_env
 from unified_system.db import Base, close_db, get_db, init_database
-from unified_system.models import Role, User, UserRole
-from unified_system.security import hash_password
+from unified_system.models import AIProviderConfig, PlatformAccountSecret, Role, User, UserRole
+from unified_system.security import (
+    decrypt_secret, encrypted_with_active_key, hash_password, validate_credential_keyring,
+    credential_keyring, encrypt_secret,
+)
 
 
 def create_app(test_config: dict | None = None) -> Flask:
@@ -46,13 +48,8 @@ def create_app(test_config: dict | None = None) -> Flask:
         SESSION_COOKIE_SAMESITE="Lax",
         JSON_AS_ASCII=False,
     )
-    if app.config.get("APP_ENV") == "production" and not app.config.get("CREDENTIAL_ENCRYPTION_KEY"):
-        raise RuntimeError("CREDENTIAL_ENCRYPTION_KEY is required in production")
-    if app.config.get("CREDENTIAL_ENCRYPTION_KEY"):
-        try:
-            Fernet(app.config["CREDENTIAL_ENCRYPTION_KEY"].encode("ascii"))
-        except (ValueError, TypeError, UnicodeEncodeError) as exc:
-            raise RuntimeError("CREDENTIAL_ENCRYPTION_KEY must be a valid Fernet key") from exc
+    if app.config.get("APP_ENV") == "production":
+        validate_credential_keyring(app.config)
 
     init_database(app)
     app.teardown_appcontext(close_db)
@@ -145,6 +142,45 @@ def create_app(test_config: dict | None = None) -> Flask:
         with app.app_context():
             seed_catalog()
         click.echo("Database schema and platform catalog initialized.")
+
+    @app.cli.command("rotate-credential-encryption-key")
+    @click.option("--apply", "apply_changes", is_flag=True, help="Re-encrypt all stored platform and AI credentials transactionally.")
+    def rotate_credential_encryption_key_command(apply_changes: bool):
+        """Dry-run by default; re-encrypt stored secrets under the configured active key ID."""
+        with app.app_context():
+            _keyring, active_id = credential_keyring()
+            if apply_changes:
+                confirmation = click.prompt(
+                    f"Type ROTATE:{active_id} to commit this key rotation", type=str,
+                )
+                if confirmation != f"ROTATE:{active_id}":
+                    raise click.ClickException("Key rotation cancelled; no rows were changed.")
+            db = get_db()
+            updated = 0
+            try:
+                for model, attribute in (
+                    (PlatformAccountSecret, "ciphertext"),
+                    (AIProviderConfig, "secret_ciphertext"),
+                ):
+                    for row in db.scalars(select(model).with_for_update()).all():
+                        value = getattr(row, attribute)
+                        if not value or encrypted_with_active_key(value):
+                            continue
+                        plaintext = decrypt_secret(value)
+                        setattr(row, attribute, encrypt_secret(plaintext))
+                        updated += 1
+                if apply_changes:
+                    db.commit()
+                else:
+                    db.rollback()
+            except click.ClickException:
+                raise
+            except Exception as exc:
+                db.rollback()
+                # Never include ciphertext, plaintext or database error text in the CLI output.
+                raise click.ClickException(f"Key rotation aborted before commit ({type(exc).__name__}); no rows were changed.") from None
+        state = "committed" if apply_changes else "dry-run; no changes written"
+        click.echo(f"Credential key rotation {state}: rows_to_reencrypt={updated}, active_key_id={active_id}")
 
     @app.cli.command("bootstrap-admin")
     def bootstrap_admin_command():

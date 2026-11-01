@@ -43,6 +43,8 @@ def settings_from_env() -> dict:
         "PERMANENT_SESSION_LIFETIME": 60 * 60 * 12,
         "MAX_CONTENT_LENGTH": 1024 * 1024,
         "CREDENTIAL_ENCRYPTION_KEY": os.environ.get("CREDENTIAL_ENCRYPTION_KEY", "").strip(),
+        "CREDENTIAL_ENCRYPTION_KEYS_JSON": os.environ.get("CREDENTIAL_ENCRYPTION_KEYS_JSON", "").strip(),
+        "CREDENTIAL_ENCRYPTION_ACTIVE_KEY_ID": os.environ.get("CREDENTIAL_ENCRYPTION_ACTIVE_KEY_ID", "").strip(),
         "DB_POOL_SIZE": _bounded_int("DB_POOL_SIZE", 5, 1, 50),
         "DB_MAX_OVERFLOW": _bounded_int("DB_MAX_OVERFLOW", 5, 0, 100),
         "DB_POOL_TIMEOUT_SECONDS": _bounded_int("DB_POOL_TIMEOUT_SECONDS", 30, 1, 120),
