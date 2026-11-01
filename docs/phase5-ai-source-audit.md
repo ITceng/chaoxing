@@ -23,11 +23,15 @@ This is a static source/configuration audit only. No provider endpoint was conta
 
 ## Reuse boundary and next implementation steps
 
-Reuse the unified database, existing authentication/session and permission framework, encrypted-secret primitives after separating the AI key, and the existing Vue console. Do not import the legacy question-answer modules. Implement a typed provider interface and safe transport adapters in `unified_system`, with explicit capabilities and honest usage provenance; then add admin configuration/model APIs, quota/usage/conversation persistence and user APIs, frontend integration, bounded document parsing, and security/authorization tests in that order. Until a real provider is safely configured and verified, report the provider state as Mock/unverified.
+Reuse the unified database, existing authentication/session and permission framework, encrypted-secret primitives after separating the AI key, and the existing Vue console. Do not import the legacy question-answer modules.
+
+The first provider layer now exists in `unified_system/services/ai_providers.py`: typed chat/usage/capability contracts, deterministic offline Mock provider, and a synchronous JSON OpenAI-compatible adapter. Endpoint URLs are restricted to exact reviewed HTTPS host/path pairs; redirects are disabled, TLS verification is mandatory, response bodies are bounded, and provider error bodies/credentials are not exposed. Token counts are accepted only when provider-reported; missing counts remain unavailable. This adapter advertises no streaming, tools, vision, structured output, or file-upload capability. The host/path set and protocol behavior are implementation candidates, **not** proof that any account/model is reachable or verified. No model catalog is published yet.
+
+Next, separate AI encryption-key configuration from platform credential encryption; add admin-only provider/model management with write-only secret rotation and sanitized connection tests; then quotas/usage, private conversation/message APIs, existing Vue console integration, bounded document parsing, and security/authorization tests in that order. Until an operator configures and verifies a real provider, expose only Mock/unverified status.
 
 ## Validation status
 
 - Static review and metadata-only secret scanning completed; no key values were emitted.
 - Historical scan identified the commit above; history remains unchanged.
-- Legacy provider tests and all live-provider checks: **not run**.
+- Provider contract/adapter tests use mocked HTTP only; live provider checks and legacy provider tests: **not run**.
 - OS/deployment environment: Debian 12 in the prior Phase 4 validation; this audit does not claim Ubuntu or production validation.
